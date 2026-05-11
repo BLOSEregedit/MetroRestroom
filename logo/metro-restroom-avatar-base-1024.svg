@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 144 144" role="img" aria-labelledby="title desc">
+  <title id="title">Metro洗手间头像底图大尺寸</title>
+  <desc id="desc">蓝绿色地铁风格头像底图，包含轨道和M字母，不含右下角卫生间标识。</desc>
+  <defs>
+    <linearGradient id="bg" x1="20" y1="14" x2="124" y2="132" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1769ff"/>
+      <stop offset="1" stop-color="#00a88b"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#003f57" flood-opacity=".18"/>
+    </filter>
+  </defs>
+
+  <rect width="144" height="144" rx="30" fill="url(#bg)"/>
+  <path d="M23 105c16-11 31-16 49-16s33 5 49 16" fill="none" stroke="#e8fff9" stroke-width="6" stroke-linecap="round" opacity=".58"/>
+  <path d="M31 113c13-8 26-12 41-12s28 4 41 12" fill="none" stroke="#e8fff9" stroke-width="5" stroke-linecap="round" opacity=".4"/>
+
+  <g filter="url(#shadow)">
+    <rect x="26" y="24" width="92" height="82" rx="21" fill="#fff"/>
+    <path d="M44 48h12l16 24 16-24h12v38H89V65L76 86h-8L55 65v21H44V48Z" fill="#1268e8"/>
+    <rect x="42" y="92" width="60" height="5" rx="2.5" fill="#dce8ef"/>
+    <circle cx="54" cy="102" r="5" fill="#1268e8"/>
+    <circle cx="90" cy="102" r="5" fill="#00a88b"/>
+  </g>
+</svg>

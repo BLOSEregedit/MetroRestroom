@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Metro洗手间头像定位标识测试</title>
+  <desc id="desc">将轻立体定位 pin 标识叠加到地铁头像底图右下角的测试图。</desc>
+  <defs>
+    <linearGradient id="bg" x1="142.2" y1="99.6" x2="881.8" y2="938.7" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1769ff"/>
+      <stop offset="1" stop-color="#00a88b"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="36" stdDeviation="36" flood-color="#003f57" flood-opacity=".18"/>
+    </filter>
+    <linearGradient id="pinFill" x1="312" y1="86" x2="710" y2="852" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset=".55" stop-color="#f8fffc"/>
+      <stop offset="1" stop-color="#eafbf6"/>
+    </linearGradient>
+    <linearGradient id="pinStroke" x1="250" y1="210" x2="785" y2="816" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#26c8ad"/>
+      <stop offset="1" stop-color="#00a88b"/>
+    </linearGradient>
+    <filter id="softShadow" x="-35%" y="-35%" width="170%" height="170%">
+      <feDropShadow dx="0" dy="34" stdDeviation="34" flood-color="#003f57" flood-opacity=".18"/>
+      <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#003f57" flood-opacity=".10"/>
+    </filter>
+    <linearGradient id="highlight" x1="324" y1="132" x2="548" y2="428" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".72"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" fill="#ffffff"/>
+  <rect width="1024" height="1024" rx="248" fill="url(#bg)"/>
+  <path d="M163.6 746.7c113.8-78.2 220.4-113.8 348.4-113.8s234.7 35.6 348.4 113.8" fill="none" stroke="#e8fff9" stroke-width="42.7" stroke-linecap="round" opacity=".58"/>
+  <path d="M220.4 803.6c92.4-56.9 184.9-85.3 291.6-85.3s199.1 28.4 291.6 85.3" fill="none" stroke="#e8fff9" stroke-width="35.6" stroke-linecap="round" opacity=".4"/>
+  <g filter="url(#shadow)">
+    <rect x="184.9" y="170.7" width="654.2" height="583.1" rx="149.3" fill="#fff"/>
+    <path d="M312.9 341.3h85.3L512 512l113.8-170.7h85.3v270.2h-78.2V462.2L540.4 611.6h-56.9L391.1 462.2v149.3h-78.2V341.3Z" fill="#1268e8"/>
+    <rect x="298.7" y="654.2" width="426.7" height="35.6" rx="17.8" fill="#dce8ef"/>
+    <circle cx="384" cy="725.3" r="35.6" fill="#1268e8"/>
+    <circle cx="640" cy="725.3" r="35.6" fill="#00a88b"/>
+  </g>
+
+  <g transform="translate(590 504) scale(.35)">
+    <g filter="url(#softShadow)">
+      <path d="M512 96c-218 0-382 152-382 351 0 275 382 562 382 562s382-287 382-562C894 248 730 96 512 96Z" fill="url(#pinFill)"/>
+      <path d="M512 167c-175 0-308 121-308 282 0 204 308 439 308 439s308-235 308-439c0-161-133-282-308-282Z" fill="none" stroke="url(#pinStroke)" stroke-width="18"/>
+    </g>
+    <path d="M304 369c37-124 142-201 273-188" fill="none" stroke="url(#highlight)" stroke-width="42" stroke-linecap="round" opacity=".75"/>
+  </g>
+</svg>
