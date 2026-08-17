@@ -18,6 +18,10 @@ page { background: #f6f7f8; color: #1f2429; }
 .mode-control--manual { color: #c94646; }
 .mode-dot { width: 12rpx; height: 12rpx; border-radius: 50%; background: #29a36a; }
 .mode-action { margin-left: 8rpx; padding-left: 14rpx; border-left: 1rpx solid rgba(201,70,70,.3); }
+.route-selector { width: 100%; margin-top: 20rpx; white-space: nowrap; }
+.route-selector__content { display: inline-flex; gap: 12rpx; padding-right: 20rpx; }
+.route-pill { display: inline-flex; min-height: 54rpx; align-items: center; box-sizing: border-box; padding: 0 20rpx; border: 1rpx solid #d8dde1; border-radius: 999rpx; background: #f6f7f8; color: #69727b; font-size: 22rpx; }
+.route-pill--selected { border-color: currentColor; background: #fff; color: #cf4d4d; font-weight: 600; }
 .wheel-heading { display: flex; justify-content: space-between; margin: 34rpx 10rpx 12rpx; color: #59626c; font-size: 25rpx; }
 .wheel-tip { color: #9ba2a9; font-size: 21rpx; }
 .station-swiper { height: auto; min-height: 450rpx; flex: 1; }

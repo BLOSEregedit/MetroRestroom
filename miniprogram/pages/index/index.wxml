@@ -20,10 +20,17 @@
       </view>
       <view wx:else class="mode-control"><text class="mode-dot"></text><text>智能定位</text></view>
     </view>
+    <scroll-view wx:if="{{showRouteSelector}}" class="route-selector" scroll-x enhanced show-scrollbar="{{false}}">
+      <view class="route-selector__content">
+        <view wx:for="{{routeOptions}}" wx:for-item="route" wx:key="id" class="route-pill {{route.id === routeId ? 'route-pill--selected' : ''}}" data-route-id="{{route.id}}" bindtap="onSelectRoute">
+          <text>{{route.terminalName || route.name}}</text>
+        </view>
+      </view>
+    </scroll-view>
   </view>
 
   <view class="wheel-heading"><text>沿线路浏览</text><text class="wheel-tip">点左侧圆点设为计算起点</text></view>
-  <swiper class="station-swiper" vertical display-multiple-items="3" current="{{currentIndex}}" duration="180" bindchange="onStationChange" bindtouchstart="onWheelTouchStart" bindtouchend="onWheelTouchEnd">
+  <swiper class="station-swiper" vertical display-multiple-items="2" current="{{currentIndex}}" duration="180" bindchange="onStationChange" bindtouchstart="onWheelTouchStart" bindtouchend="onWheelTouchEnd">
     <swiper-item wx:for="{{stations}}" wx:for-item="station" wx:key="id">
       <view class="station-row {{station.isActive ? 'station-row--active' : ''}}">
         <view class="track-column">

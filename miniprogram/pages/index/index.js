@@ -1,4 +1,4 @@
-const prototype = require('../../data/prototype');
+const catalog = require('../../data/catalog');
 const { createStationFeedback } = require('../../utils/feedback');
 const {
   addRecentRecord,
@@ -17,11 +17,10 @@ function getLineColor(line) {
 function normalizeLineOptions(options) {
   return (options || []).map((option) => {
     if (typeof option === 'string') return { id: option, name: option };
-    return {
-      ...option,
+    return Object.assign({}, option, {
       id: option.id || option.lineId,
       name: option.name || option.label || option.title || option.id || option.lineId,
-    };
+    });
   });
 }
 
@@ -29,6 +28,7 @@ Page({
   data: {
     cityName: '上海',
     lineId: '',
+    routeId: '',
     lineName: '',
     lineColor: '#1677ff',
     directionLabel: '',
@@ -43,12 +43,14 @@ Page({
     showStationPicker: false,
     showRestroomDrawer: false,
     lineOptions: [],
+    routeOptions: [],
+    showRouteSelector: false,
     drawerStation: null,
     drawerRestrooms: [],
   },
 
   onLoad() {
-    const initialState = prototype.getInitialHomeState();
+    const initialState = catalog.getInitialHomeState();
 
     this._state = {
       lineId: initialState.lineId,
@@ -64,7 +66,7 @@ Page({
     this._lastFeedbackIndex = null;
 
     this.setData({
-      lineOptions: normalizeLineOptions(prototype.getLineOptions()),
+      lineOptions: normalizeLineOptions(catalog.getLineOptions()),
       isManualAnchor: initialState.originMode === 'manual',
       soundEnabled: initialState.soundEnabled !== false,
       vibrationEnabled: initialState.vibrationEnabled !== false,
@@ -75,7 +77,7 @@ Page({
   onShow() {
     if (!this._state) return;
 
-    const initialState = prototype.getInitialHomeState();
+    const initialState = catalog.getInitialHomeState();
     this._state = {
       lineId: initialState.lineId,
       direction: initialState.direction,
@@ -101,7 +103,15 @@ Page({
   },
 
   _buildHomeView() {
-    return prototype.buildHomeView({ ...this._state });
+    return catalog.buildHomeView(Object.assign({}, this._state));
+  },
+
+  _getDirectionOptions(lineOption, routeId) {
+    const option = lineOption || {};
+    const route = (option.routes || []).find((item) => item.id === routeId);
+    return (route && route.directions && route.directions.length)
+      ? route.directions
+      : (option.directions || []);
   },
 
   _refreshHomeView(preferredStationId) {
@@ -114,7 +124,11 @@ Page({
 
     this._homeView = homeView;
     this._rawStations = rawStations;
+    this._state.routeId = homeView.line.routeId || this._state.routeId;
+    this._state.direction = homeView.direction || this._state.direction;
     this._state.originStationId = homeView.originStationId || this._state.originStationId;
+    const lineOption = this.data.lineOptions.find((item) => item.id === this._state.lineId) || {};
+    const routeOptions = lineOption.routes || [];
 
     this.setData({
       lineId: this._state.lineId,
@@ -123,6 +137,9 @@ Page({
       directionLabel: homeView.directionLabel || '',
       originStationId: this._state.originStationId,
       originStationName: homeView.originStationName || '',
+      routeId: this._state.routeId,
+      routeOptions,
+      showRouteSelector: lineOption.type === 'branched' && routeOptions.length > 1,
       currentIndex,
       stations: this._decorateStations(rawStations, currentIndex, getLineColor(homeView.line)),
     });
@@ -132,8 +149,7 @@ Page({
   _decorateStations(stations, currentIndex, lineColor) {
     return stations.map((station, index) => {
       const restrooms = station.restrooms || [];
-      return {
-        ...station,
+      return Object.assign({}, station, {
         restrooms,
         primaryRestroom: restrooms[0] || null,
         restroomCount: restrooms.length,
@@ -141,7 +157,7 @@ Page({
         isOrigin: station.id === this._state.originStationId,
         isSystemOrigin: !this.data.isManualAnchor && station.id === this._systemOriginStationId,
         dotStyle: `border-color: ${lineColor}; background-color: ${!this.data.isManualAnchor && station.id === this._systemOriginStationId ? lineColor : '#f6f7f8'};`,
-      };
+      });
     });
   },
 
@@ -151,14 +167,13 @@ Page({
   },
 
   _saveCurrentPreferences(patch) {
-    savePreferences({
+    savePreferences(Object.assign({
       lineId: this._state.lineId,
       direction: this._state.direction,
       originStationId: this._state.originStationId,
       routeId: this._state.routeId,
       originMode: this.data.isManualAnchor ? 'manual' : 'smart',
-      ...(patch || {}),
-    });
+    }, patch || {}));
   },
 
   _addRecentRecord(station, action) {
@@ -220,8 +235,10 @@ Page({
     if (!option) return;
 
     this._state.lineId = option.id;
-    this._state.direction = option.directions[0].id;
-    this._state.routeId = option.defaultRouteId;
+    this._state.direction = option.defaultDirection
+      || (option.directions[0] && option.directions[0].id)
+      || 'forward';
+    this._state.routeId = option.type === 'branched' ? '' : option.defaultRouteId;
     this._refreshHomeView(transfer.stationId);
     this._saveCurrentPreferences();
     this._addRecentRecord(this._rawStations[this.data.currentIndex], '换乘浏览');
@@ -242,8 +259,10 @@ Page({
     const visibleStationId = this._visibleStationId();
 
     this._state.lineId = lineId;
-    this._state.direction = (option.directions && option.directions[0] && option.directions[0].id) || 'forward';
-    this._state.routeId = option.defaultRouteId;
+    this._state.direction = option.defaultDirection
+      || (option.directions && option.directions[0] && option.directions[0].id)
+      || 'forward';
+    this._state.routeId = option.type === 'branched' ? '' : option.defaultRouteId;
     this.setData({ showLinePicker: false });
     this._refreshHomeView(visibleStationId);
     this._saveCurrentPreferences();
@@ -298,7 +317,7 @@ Page({
   onSwitchDirection() {
     const visibleStationId = this._visibleStationId();
     const lineOption = this.data.lineOptions.find((item) => item.id === this._state.lineId) || {};
-    const directions = lineOption.directions || [];
+    const directions = this._getDirectionOptions(lineOption, this._state.routeId);
     const directionIndex = directions.findIndex((item) => item.id === this._state.direction);
     const nextDirection = directions.length > 1
       ? directions[(directionIndex + 1) % directions.length]
@@ -310,6 +329,32 @@ Page({
 
     this._state.direction = nextDirection.id;
     this._refreshHomeView(visibleStationId);
+    this._saveCurrentPreferences();
+  },
+
+  onSelectRoute(event) {
+    const routeId = event.currentTarget.dataset.routeId;
+    if (!routeId || routeId === this._state.routeId) return;
+
+    const visibleStationId = this._visibleStationId();
+    const visibleStation = (this._rawStations || []).find((item) => item.id === visibleStationId);
+    const lineOption = this.data.lineOptions.find((item) => item.id === this._state.lineId) || {};
+    const routeOption = (lineOption.routes || []).find((item) => item.id === routeId) || {};
+    const keepVisibleStation = visibleStation
+      && (routeOption.stationNames || []).includes(visibleStation.name);
+    const directions = this._getDirectionOptions(lineOption, routeId);
+    if (!directions.some((item) => item.id === this._state.direction)) {
+      this._state.direction = (directions[0] && directions[0].id) || this._state.direction;
+    }
+    this._state.routeId = routeId;
+    this._refreshHomeView(keepVisibleStation ? visibleStationId : null);
+    if (!keepVisibleStation && routeOption.splitStationName) {
+      const splitStation = (this._rawStations || []).find(
+        (station) => station.name === routeOption.splitStationName,
+      );
+      if (splitStation) this._refreshHomeView(splitStation.id);
+      wx.showToast({ title: `已回到${routeOption.splitStationName}`, icon: 'none' });
+    }
     this._saveCurrentPreferences();
   },
 

@@ -6,8 +6,7 @@ const {
 } = require("../../utils/storage");
 
 function formatRecentRecords(records) {
-  return records.map((record) => ({
-    ...record,
+  return records.map((record) => Object.assign({}, record, {
     lineName: record.lineName || `${record.lineId}号线`,
     stationName: record.stationName || record.stationId,
     action: record.action || "浏览",
