@@ -1,29 +1,68 @@
-<!--index.wxml-->
-<view class="container">
-  <view class="title">快速了解云开发</view>
-  <view class="top_tip">免鉴权接口调用 免部署后台 高并发</view>
-  <view class="power" wx:key="title" wx:for="{{powerList}}" wx:for-item="power">
-    <view class="power_info" data-index="{{index}}" data-type="{{ power.type }}" bindtap="onClickPowerInfo">
-      <view class="power_info_text">
-        <view class="power_info_text_title">
-          {{power.title}}
-          <view class="power_info_text_tag" wx:if="{{power.tag}}">{{power.tag}}</view>
-        </view>
-        <view class="power_info_text_tip">{{power.tip}}</view>
+<view class="page">
+  <view class="control-card">
+    <view class="control-row control-row--first">
+      <text class="city-name">{{cityName}}</text>
+      <view class="line-control" bindtap="onOpenLinePicker" style="border-color: {{lineColor}}; color: {{lineColor}};">
+        <text>{{lineName}}</text><text class="control-chevron">⌄</text>
       </view>
-      <image wx:if="{{!power.showItem && power.item.length}}" class="power_info_more" src="../../images/arrow.svg"></image>
-      <image wx:if="{{power.showItem && power.item.length}}" class="power_info_less" src="../../images/arrow.svg"></image>
-      <image wx:if="{{!power.item.length}}" class="power_item_icon" src="../../images/arrow.svg"></image>
     </view>
-    <view wx:if="{{power.showItem}}">
-      <view wx:key="title" wx:for="{{power.item}}">
-        <view class="line"></view>
-        <view class="power_item" bindtap="jumpPage" data-type="{{ item.type }}" data-page="{{item.page}}">
-          <view class="power_item_title">{{item.title}}</view>
-          <image class="power_item_icon" src="../../images/arrow.svg"></image>
-        </view>
+    <view class="control-row control-row--second">
+      <view class="origin-control" bindtap="onOpenStationPicker">
+        <text class="origin-name">{{originStationName}}</text><text class="origin-caption">计算起点</text>
       </view>
+      <view class="direction-control" bindtap="onSwitchDirection">
+        <text class="direction-label">{{directionLabel}}</text><text class="direction-switch">⇄</text>
+      </view>
+    </view>
+    <view class="control-row control-row--mode">
+      <view wx:if="{{isManualAnchor}}" class="mode-control mode-control--manual" bindtap="onRestoreSmartLocation">
+        <text>手动锚点</text><text class="mode-action">恢复智能定位</text>
+      </view>
+      <view wx:else class="mode-control"><text class="mode-dot"></text><text>智能定位</text></view>
     </view>
   </view>
-  <cloud-tip-modal showTipProps="{{showTip}}" title="{{title}}" content="{{content}}"></cloud-tip-modal>
+
+  <view class="wheel-heading"><text>沿线路浏览</text><text class="wheel-tip">点左侧圆点设为计算起点</text></view>
+  <swiper class="station-swiper" vertical display-multiple-items="3" current="{{currentIndex}}" duration="180" bindchange="onStationChange" bindtouchstart="onWheelTouchStart" bindtouchend="onWheelTouchEnd">
+    <swiper-item wx:for="{{stations}}" wx:for-item="station" wx:key="id">
+      <view class="station-row {{station.isActive ? 'station-row--active' : ''}}">
+        <view class="track-column">
+          <view class="track-line" style="background-color: {{lineColor}};"></view>
+          <view class="station-dot {{station.isOrigin ? 'station-dot--anchor' : ''}} {{station.isSystemOrigin ? 'station-dot--system' : ''}}" data-station-id="{{station.id}}" bindtap="onSetManualAnchor" style="{{station.dotStyle}}">
+            <text wx:if="{{station.isOrigin}}" class="pin-mark">●</text>
+          </view>
+        </view>
+        <view wx:if="{{station.dataState === 'unavailable'}}" class="unavailable-station-card {{station.isActive ? 'unavailable-station-card--active' : ''}}">
+          <text class="station-name">{{station.name}}</text>
+          <view class="unavailable-message"><text class="unavailable-mark">!</text><text>数据暂不可用</text></view>
+          <text class="unavailable-tip">请稍后重试，不将其视为无厕所</text>
+        </view>
+        <view wx:elif="{{station.hasRestroom}}" class="station-card {{station.isActive ? 'station-card--active' : ''}} {{station.isReverse ? 'station-card--reverse' : ''}}">
+          <view class="station-card__header"><text class="station-name">{{station.name}}</text><text wx:if="{{station.isReverse}}" class="reverse-label">↩ 需掉头</text></view>
+          <view class="restroom-summary"><text class="eta-label">{{station.primaryRestroom.etaLabel}}</text><text wx:if="{{station.primaryRestroom.location}}">· {{station.primaryRestroom.location}}</text></view>
+          <view class="restroom-meta"><text wx:if="{{station.primaryRestroom.access}}">{{station.primaryRestroom.access}}</text><text wx:if="{{station.primaryRestroom.facility}}">{{station.primaryRestroom.facility}}</text></view>
+          <view wx:if="{{station.restroomCount > 1}}" class="view-all" data-station-id="{{station.id}}" catchtap="onOpenRestroomDrawer"><text>另有 {{station.restroomCount - 1}} 处</text><text>查看全部 ›</text></view>
+        </view>
+        <view wx:else class="empty-station-card {{station.isActive ? 'empty-station-card--active' : ''}}"><text class="station-name">{{station.name}}</text><text class="empty-text">暂无厕所记录</text></view>
+      </view>
+    </swiper-item>
+  </swiper>
+
+  <view wx:if="{{showLinePicker}}" class="overlay" bindtap="onCloseLinePicker">
+    <view class="picker-sheet" catchtap="onStopPropagation"><view class="sheet-handle"></view><view class="sheet-title">选择浏览线路</view>
+      <scroll-view class="picker-list" scroll-y><view wx:for="{{lineOptions}}" wx:for-item="line" wx:key="id" class="picker-item {{line.id === lineId ? 'picker-item--selected' : ''}}" data-line-id="{{line.id}}" bindtap="onSelectLine"><text>{{line.name}}</text><text wx:if="{{line.id === lineId}}" class="selected-mark">✓</text></view></scroll-view>
+    </view>
+  </view>
+  <view wx:if="{{showStationPicker}}" class="overlay" bindtap="onCloseStationPicker">
+    <view class="picker-sheet" catchtap="onStopPropagation"><view class="sheet-handle"></view><view class="sheet-title">选择计算起点</view>
+      <scroll-view class="picker-list" scroll-y><view wx:for="{{stations}}" wx:for-item="station" wx:key="id" class="picker-item {{station.id === originStationId ? 'picker-item--selected' : ''}}" data-station-id="{{station.id}}" bindtap="onSelectOriginStation"><text>{{station.name}}</text><text wx:if="{{station.id === originStationId}}" class="selected-mark">✓</text></view></scroll-view>
+    </view>
+  </view>
+  <view wx:if="{{showRestroomDrawer}}" class="overlay" bindtap="onCloseRestroomDrawer">
+    <view class="drawer-sheet" catchtap="onStopPropagation"><view class="sheet-handle"></view>
+      <view class="drawer-header"><view><view class="sheet-title">{{drawerStation.name}}</view><text class="drawer-count">共 {{drawerRestrooms.length}} 处厕所</text></view><text class="drawer-close" bindtap="onCloseRestroomDrawer">×</text></view>
+      <scroll-view class="drawer-list" scroll-y><view wx:for="{{drawerRestrooms}}" wx:key="id" class="drawer-item"><view class="drawer-item__top"><text class="eta-label">{{item.etaLabel}}</text><text wx:if="{{item.facility}}" class="facility-label">{{item.facility}}</text></view><text wx:if="{{item.location}}" class="drawer-location">{{item.location}}</text><text wx:if="{{item.access}}" class="drawer-access">{{item.access}}</text></view></scroll-view>
+      <view class="drawer-feedback" data-station-id="{{drawerStation.id}}" bindtap="onCorrectRestroom"><text>反馈数据问题</text><text>›</text></view>
+    </view>
+  </view>
 </view>

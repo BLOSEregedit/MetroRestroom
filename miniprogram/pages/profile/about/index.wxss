@@ -1,0 +1,8 @@
+.about-page { min-height: 100vh; padding: 88rpx 40rpx; box-sizing: border-box; text-align: center; }
+.about-mark { width: 96rpx; height: 96rpx; margin: 0 auto 24rpx; border-radius: 30rpx; background: #d84a4a; color: #fff; font-size: 40rpx; line-height: 96rpx; }
+.about-title { font-size: 40rpx; font-weight: 600; }
+.about-subtitle { margin-top: 10rpx; color: #999; font-size: 26rpx; }
+.about-card { margin-top: 72rpx; padding: 8rpx 28rpx; border-radius: 24rpx; background: #fff; text-align: left; }
+.info-row { display: flex; justify-content: space-between; padding: 28rpx 0; border-bottom: 1rpx solid #eee; color: #555; font-size: 26rpx; }
+.info-row:last-child { border-bottom: 0; }
+.info-row text:last-child { color: #999; }

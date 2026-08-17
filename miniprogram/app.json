@@ -1,16 +1,27 @@
 {
   "pages": [
     "pages/index/index",
-    "pages/example/index"
+    "pages/profile/index",
+    "pages/profile/about/index"
   ],
   "window": {
     "backgroundColor": "#F6F6F6",
     "backgroundTextStyle": "light",
     "navigationBarBackgroundColor": "#F6F6F6",
-    "navigationBarTitleText": "云开发 QuickStart",
+    "navigationBarTitleText": "MetroRestroom",
     "navigationBarTextStyle": "black"
   },
   "sitemapLocation": "sitemap.json",
   "style": "v2",
-  "lazyCodeLoading": "requiredComponents"
+  "lazyCodeLoading": "requiredComponents",
+  "tabBar": {
+    "color": "#8A8A8A",
+    "selectedColor": "#D84A4A",
+    "backgroundColor": "#FFFFFF",
+    "borderStyle": "white",
+    "list": [
+      {"pagePath": "pages/index/index", "text": "首页", "iconPath": "images/icons/home.png", "selectedIconPath": "images/icons/home-active.png"},
+      {"pagePath": "pages/profile/index", "text": "我的", "iconPath": "images/icons/usercenter.png", "selectedIconPath": "images/icons/usercenter-active.png"}
+    ]
+  }
 }

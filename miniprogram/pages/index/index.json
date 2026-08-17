@@ -1,6 +1,6 @@
 {
-  "navigationBarTitleText": "基础能力",
-  "usingComponents": {
-    "cloud-tip-modal": "/components/cloudTipModal/index"
-  }
+  "navigationBarTitleText": "MetroRestroom",
+  "navigationBarBackgroundColor": "#F6F7F8",
+  "navigationBarTextStyle": "black",
+  "backgroundColor": "#F6F7F8"
 }
