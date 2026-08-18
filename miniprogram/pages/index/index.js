@@ -1,8 +1,15 @@
 const catalog = require('../../data/catalog');
+const stationLocationData = require('../../data/station-locations');
 const { createStationFeedback } = require('../../utils/feedback');
+const { rankNearbyStations } = require('../../utils/location');
+const {
+  requestCurrentPosition,
+  openLocationSettings,
+} = require('../../utils/location-service');
 const {
   addRecentRecord,
   savePreferences,
+  saveLastLocationStation,
 } = require('../../utils/storage');
 
 function getLineName(line, lineId) {
@@ -47,6 +54,14 @@ Page({
     showRouteSelector: false,
     drawerStation: null,
     drawerRestrooms: [],
+    locationDataReady: false,
+    locationStatus: 'notRequested',
+    locationLabel: '尚未开启定位',
+    locationActionLabel: '开启智能定位',
+    showLocationAction: true,
+    showLocationCandidates: false,
+    locationCandidates: [],
+    locationIssue: '',
   },
 
   onLoad() {
@@ -59,6 +74,9 @@ Page({
       routeId: initialState.routeId,
     };
     this._systemOriginStationId = initialState.systemOriginStationId || initialState.originStationId;
+    this._directionMode = initialState.directionMode || 'default';
+    this._locationRequestToken = 0;
+    this._hasConfirmedLocation = Boolean(initialState.lastLocationStation);
     this._feedback = createStationFeedback({
       soundEnabled: initialState.soundEnabled,
       vibrationEnabled: initialState.vibrationEnabled,
@@ -70,7 +88,13 @@ Page({
       isManualAnchor: initialState.originMode === 'manual',
       soundEnabled: initialState.soundEnabled !== false,
       vibrationEnabled: initialState.vibrationEnabled !== false,
+      locationDataReady: stationLocationData.dataReady === true,
     });
+    if (stationLocationData.dataReady !== true) {
+      this._setLocationStatus('unavailable');
+    } else if (initialState.lastLocationStation) {
+      this._setLocationStatus('cached');
+    }
     this._refreshHomeView();
   },
 
@@ -89,6 +113,8 @@ Page({
       soundEnabled: initialState.soundEnabled !== false,
       vibrationEnabled: initialState.vibrationEnabled !== false,
     });
+    this._systemOriginStationId = initialState.systemOriginStationId || this._systemOriginStationId;
+    this._directionMode = initialState.directionMode || this._directionMode;
     if (this._feedback) {
       this._feedback.updatePreferences({
         soundEnabled: initialState.soundEnabled,
@@ -99,7 +125,54 @@ Page({
   },
 
   onUnload() {
+    this._locationRequestToken += 1;
     if (this._feedback) this._feedback.destroy();
+  },
+
+  _setLocationStatus(status, issue) {
+    const states = {
+      unavailable: {
+        label: '手动查询', action: '定位数据准备中', showAction: false,
+      },
+      notRequested: {
+        label: '尚未开启定位', action: '开启智能定位', showAction: true,
+      },
+      cached: {
+        label: '上次位置', action: '重新定位', showAction: true,
+      },
+      locating: {
+        label: '正在定位…', action: '', showAction: false,
+      },
+      success: {
+        label: '智能定位', action: '重新定位', showAction: true,
+      },
+      ambiguous: {
+        label: '位置需要确认', action: '查看候选', showAction: true,
+      },
+      unmatched: {
+        label: '附近未匹配到地铁站', action: '重新定位', showAction: true,
+      },
+      denied: {
+        label: '未开启定位', action: '去开启定位', showAction: true,
+      },
+      failed: {
+        label: '定位失败，仍可手动查询', action: '重新定位', showAction: true,
+      },
+    };
+    const state = states[status] || states.failed;
+    this.setData({
+      locationStatus: status,
+      locationLabel: state.label,
+      locationActionLabel: state.action,
+      showLocationAction: state.showAction,
+      locationIssue: issue || '',
+    });
+  },
+
+  _cancelPendingLocation() {
+    if (this.data.locationStatus !== 'locating') return;
+    this._locationRequestToken += 1;
+    this._setLocationStatus(this._hasConfirmedLocation ? 'cached' : 'notRequested');
   },
 
   _buildHomeView() {
@@ -173,6 +246,7 @@ Page({
       originStationId: this._state.originStationId,
       routeId: this._state.routeId,
       originMode: this.data.isManualAnchor ? 'manual' : 'smart',
+      directionMode: this._directionMode || 'default',
     }, patch || {}));
   },
 
@@ -234,6 +308,7 @@ Page({
     const option = this.data.lineOptions.find((item) => item.id === transfer.lineId);
     if (!option) return;
 
+    this._cancelPendingLocation();
     this._state.lineId = option.id;
     this._state.direction = option.defaultDirection
       || (option.directions[0] && option.directions[0].id)
@@ -258,6 +333,7 @@ Page({
     const option = this.data.lineOptions.find((item) => item.id === lineId) || {};
     const visibleStationId = this._visibleStationId();
 
+    this._cancelPendingLocation();
     this._state.lineId = lineId;
     this._state.direction = option.defaultDirection
       || (option.directions && option.directions[0] && option.directions[0].id)
@@ -279,6 +355,7 @@ Page({
 
   onSelectOriginStation(event) {
     const originStationId = event.currentTarget.dataset.stationId;
+    this._cancelPendingLocation();
     this._state.originStationId = originStationId;
     this.setData({ isManualAnchor: true, showStationPicker: false });
     this._refreshHomeView(originStationId);
@@ -290,6 +367,7 @@ Page({
   onSetManualAnchor(event) {
     const originStationId = event.currentTarget.dataset.stationId;
     const visibleStationId = this._visibleStationId();
+    this._cancelPendingLocation();
     this._state.originStationId = originStationId;
     this.setData({ isManualAnchor: true });
     this._refreshHomeView(visibleStationId || originStationId);
@@ -302,16 +380,120 @@ Page({
   },
 
   onRestoreSmartLocation() {
-    if (!this._systemOriginStationId) {
-      wx.showToast({ title: '暂时无法恢复智能定位', icon: 'none' });
+    this.onRequestLocation();
+  },
+
+  onLocationAction() {
+    if (this.data.locationStatus === 'ambiguous' && this.data.locationCandidates.length) {
+      this.setData({ showLocationCandidates: true });
+      return;
+    }
+    if (this.data.locationStatus === 'denied'
+      && this.data.locationIssue === 'permissionDenied') {
+      openLocationSettings(wx).then((enabled) => {
+        if (!enabled) {
+          wx.showToast({ title: '可继续手动查询', icon: 'none' });
+          return;
+        }
+        this.onRequestLocation();
+      });
+      return;
+    }
+    this.onRequestLocation();
+  },
+
+  onRequestLocation() {
+    if (stationLocationData.dataReady !== true || !(stationLocationData.stations || []).length) {
+      wx.showToast({ title: '站点定位数据准备中', icon: 'none' });
       return;
     }
 
-    const visibleStationId = this._visibleStationId();
-    this._state.originStationId = this._systemOriginStationId;
-    this.setData({ isManualAnchor: false });
-    this._refreshHomeView(visibleStationId || this._systemOriginStationId);
-    this._saveCurrentPreferences({ originMode: 'smart' });
+    const requestToken = this._locationRequestToken + 1;
+    this._locationRequestToken = requestToken;
+    this._setLocationStatus('locating');
+    requestCurrentPosition(wx).then((result) => {
+      if (requestToken !== this._locationRequestToken) return;
+
+      if (!result.ok) {
+        this._setLocationStatus(result.status, result.issue);
+        return;
+      }
+
+      const match = rankNearbyStations(result.position, stationLocationData.stations);
+      if (match.status === 'unmatched') {
+        this._setLocationStatus('unmatched');
+        return;
+      }
+      if (match.status !== 'success' && match.status !== 'ambiguous') {
+        this._setLocationStatus('failed');
+        return;
+      }
+
+      const candidates = match.candidates.reduce((all, candidate) => (
+        all.concat(catalog.getLocationCandidateOptions(candidate))
+      ), []).map((candidate) => Object.assign({}, candidate, {
+        distanceLabel: candidate.distanceMeters < 1000
+          ? `约 ${candidate.distanceMeters} 米`
+          : `约 ${(candidate.distanceMeters / 1000).toFixed(1)} 公里`,
+      }));
+
+      if (candidates.length !== 1) {
+        this.setData({
+          locationCandidates: candidates,
+          showLocationCandidates: true,
+        });
+        this._setLocationStatus('ambiguous');
+        return;
+      }
+
+      this._applyLocationCandidate(candidates[0]);
+    }).catch(() => {
+      if (requestToken === this._locationRequestToken) this._setLocationStatus('failed');
+    });
+  },
+
+  _applyLocationCandidate(candidate) {
+    if (!candidate || !candidate.lineStationId) return;
+
+    this._systemOriginStationId = candidate.lineStationId;
+    this._hasConfirmedLocation = true;
+    this._directionMode = 'default';
+    this._state.lineId = candidate.lineId;
+    this._state.routeId = candidate.routeId;
+    this._state.direction = candidate.direction;
+    this._state.originStationId = candidate.lineStationId;
+    saveLastLocationStation({
+      lineStationId: candidate.lineStationId,
+      physicalStationId: candidate.physicalStationId,
+    });
+    this.setData({
+      isManualAnchor: false,
+      showLocationCandidates: false,
+      locationCandidates: [],
+    });
+    this._refreshHomeView(candidate.lineStationId);
+    this._saveCurrentPreferences({ originMode: 'smart', directionMode: 'default' });
+    this._setLocationStatus('success');
+    wx.showToast({ title: `已定位到${candidate.stationName}`, icon: 'none' });
+  },
+
+  onSelectLocationCandidate(event) {
+    const lineStationId = event.currentTarget.dataset.stationId;
+    const candidate = this.data.locationCandidates.find(
+      (item) => item.lineStationId === lineStationId,
+    );
+    this._applyLocationCandidate(candidate);
+  },
+
+  onCloseLocationCandidates() {
+    this.setData({ showLocationCandidates: false });
+  },
+
+  onChooseManualLocation() {
+    this.setData({
+      showLocationCandidates: false,
+      showStationPicker: true,
+    });
   },
 
   onSwitchDirection() {
@@ -327,15 +509,18 @@ Page({
       return;
     }
 
+    this._cancelPendingLocation();
     this._state.direction = nextDirection.id;
+    this._directionMode = 'manual';
     this._refreshHomeView(visibleStationId);
-    this._saveCurrentPreferences();
+    this._saveCurrentPreferences({ directionMode: 'manual' });
   },
 
   onSelectRoute(event) {
     const routeId = event.currentTarget.dataset.routeId;
     if (!routeId || routeId === this._state.routeId) return;
 
+    this._cancelPendingLocation();
     const visibleStationId = this._visibleStationId();
     const visibleStation = (this._rawStations || []).find((item) => item.id === visibleStationId);
     const lineOption = this.data.lineOptions.find((item) => item.id === this._state.lineId) || {};

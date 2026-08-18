@@ -5,7 +5,7 @@ const {
   normalizeStationName,
 } = require('./topology');
 const { estimateEta } = require('../utils/eta');
-const { getPreferences } = require('../utils/storage');
+const { getPreferences, getLastLocationStation } = require('../utils/storage');
 
 const records = restroomData.lines.reduce(
   (result, line) => result.concat(line.records || []),
@@ -282,6 +282,49 @@ function resolveStationId(stationId) {
     : SYSTEM_ORIGIN_STATION_ID;
 }
 
+function routeForRecord(line, record) {
+  const normalizedName = normalizeStationName(record.stationName, record.lineId);
+  return line.routes.find((route) => (route.stationNames || []).some((stationName) => (
+    normalizeStationName(stationName, line.id) === normalizedName
+  ))) || line.routes[0];
+}
+
+function getStationContext(stationId) {
+  const record = recordById[stationId];
+  if (!record || !browsableStationIds[stationId]) return null;
+
+  const line = LINES[record.lineId];
+  const route = routeForRecord(line, record);
+  const directionIds = routeDirectionIds(line, route);
+  const direction = directionIds.includes(line.defaultDirection)
+    ? line.defaultDirection
+    : directionIds[0];
+  return {
+    lineStationId: stationId,
+    lineId: line.id,
+    lineName: line.name,
+    stationName: record.stationName,
+    routeId: route.id,
+    direction,
+  };
+}
+
+function getLocationCandidateOptions(candidate) {
+  const source = candidate || {};
+  return (source.lineStationIds || []).map((stationId) => {
+    const context = getStationContext(stationId);
+    return context && Object.assign({}, context, {
+      physicalStationId: source.physicalStationId || '',
+      distanceMeters: Number(source.distanceMeters) || 0,
+    });
+  }).filter(Boolean).sort((left, right) => {
+    const lineDifference = String(left.lineId).localeCompare(String(right.lineId), 'zh-CN', {
+      numeric: true,
+    });
+    return lineDifference || left.lineStationId.localeCompare(right.lineStationId);
+  });
+}
+
 function visibleOriginIndex(stations, originStationId) {
   const directIndex = stations.findIndex((station) => station.id === originStationId);
   if (directIndex >= 0) return directIndex;
@@ -384,10 +427,16 @@ function buildHomeView(input) {
 
 function getInitialHomeState() {
   const preferences = getPreferences();
+  const lastLocation = getLastLocationStation();
+  const lastLocationStationId = lastLocation
+    && browsableStationIds[lastLocation.lineStationId]
+    ? lastLocation.lineStationId
+    : '';
+  const systemOriginStationId = lastLocationStationId || SYSTEM_ORIGIN_STATION_ID;
   const manualOriginId = resolveStationId(preferences.originStationId);
   const originStationId = preferences.originMode === 'manual'
     ? manualOriginId
-    : SYSTEM_ORIGIN_STATION_ID;
+    : systemOriginStationId;
   const view = buildHomeView({
     lineId: preferences.lineId,
     routeId: preferences.routeId,
@@ -401,9 +450,11 @@ function getInitialHomeState() {
     direction: view.direction,
     originStationId: view.originStationId,
     originMode: preferences.originMode === 'manual' ? 'manual' : 'smart',
-    systemOriginStationId: SYSTEM_ORIGIN_STATION_ID,
+    systemOriginStationId,
+    lastLocationStation: lastLocationStationId ? lastLocation : null,
     visibleStationId: view.stations[view.currentIndex] && view.stations[view.currentIndex].id,
     locationStatus: 'notRequested',
+    directionMode: preferences.directionMode === 'manual' ? 'manual' : 'default',
     soundEnabled: preferences.soundEnabled !== false,
     vibrationEnabled: preferences.vibrationEnabled !== false,
   };
@@ -413,4 +464,6 @@ module.exports = {
   getInitialHomeState,
   getLineOptions,
   buildHomeView,
+  getStationContext,
+  getLocationCandidateOptions,
 };

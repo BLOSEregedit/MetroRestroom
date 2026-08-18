@@ -1,0 +1,7 @@
+[out:json][timeout:120];
+(
+  nwr["railway"="station"]["station"~"subway|light_rail"](30.65,120.80,31.90,122.10);
+  nwr["public_transport"="station"]["subway"="yes"](30.65,120.80,31.90,122.10);
+  nwr["public_transport"="station"]["light_rail"="yes"](30.65,120.80,31.90,122.10);
+);
+out center tags qt;

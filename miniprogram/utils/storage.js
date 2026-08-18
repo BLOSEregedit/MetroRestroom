@@ -1,6 +1,7 @@
 const STORAGE_KEYS = Object.freeze({
   preferences: "metroRestroom:preferences",
   recentRecords: "metroRestroom:recentRecords",
+  lastLocationStation: "metroRestroom:lastLocationStation",
 });
 
 const DEFAULT_PREFERENCES = Object.freeze({
@@ -11,6 +12,7 @@ const DEFAULT_PREFERENCES = Object.freeze({
   direction: "to-pudong-airport",
   originStationId: "l2-renmin-square",
   originMode: "smart",
+  directionMode: "default",
 });
 
 const memoryStorage = Object.create(null);
@@ -113,6 +115,31 @@ function clearRecentRecords() {
   return [];
 }
 
+function getLastLocationStation() {
+  const stored = readStorage(STORAGE_KEYS.lastLocationStation);
+  return isPlainObject(stored) && stored.lineStationId
+    ? Object.assign({}, stored)
+    : null;
+}
+
+function saveLastLocationStation(station) {
+  if (!isPlainObject(station) || !station.lineStationId) {
+    throw new TypeError("最近定位站必须包含 lineStationId");
+  }
+  const next = {
+    lineStationId: String(station.lineStationId),
+    physicalStationId: String(station.physicalStationId || ""),
+    locatedAt: Number(station.locatedAt) || Date.now(),
+  };
+  writeStorage(STORAGE_KEYS.lastLocationStation, next);
+  return next;
+}
+
+function clearLastLocationStation() {
+  removeStorage(STORAGE_KEYS.lastLocationStation);
+  return null;
+}
+
 module.exports = {
   STORAGE_KEYS,
   DEFAULT_PREFERENCES,
@@ -122,4 +149,7 @@ module.exports = {
   getRecentRecords,
   addRecentRecord,
   clearRecentRecords,
+  getLastLocationStation,
+  saveLastLocationStation,
+  clearLastLocationStation,
 };

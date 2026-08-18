@@ -18,7 +18,10 @@
       <view wx:if="{{isManualAnchor}}" class="mode-control mode-control--manual" bindtap="onRestoreSmartLocation">
         <text>手动锚点</text><text class="mode-action">恢复智能定位</text>
       </view>
-      <view wx:else class="mode-control"><text class="mode-dot"></text><text>智能定位</text></view>
+      <view wx:else class="mode-control mode-control--{{locationStatus}}" bindtap="onLocationAction">
+        <text class="mode-dot"></text><text>{{locationLabel}}</text>
+        <text wx:if="{{showLocationAction}}" class="mode-action">{{locationActionLabel}}</text>
+      </view>
     </view>
     <scroll-view wx:if="{{showRouteSelector}}" class="route-selector" scroll-x enhanced show-scrollbar="{{false}}">
       <view class="route-selector__content">
@@ -47,7 +50,7 @@
         <view wx:elif="{{station.hasRestroom}}" class="station-card {{station.isActive ? 'station-card--active' : ''}} {{station.isReverse ? 'station-card--reverse' : ''}}">
           <view class="station-card__header"><text class="station-name">{{station.name}}</text><text wx:if="{{station.isReverse}}" class="reverse-label">↩ 需掉头</text></view>
           <view class="restroom-summary"><text class="eta-label">{{station.primaryRestroom.etaLabel}}</text><text wx:if="{{station.primaryRestroom.location}}">· {{station.primaryRestroom.location}}</text></view>
-          <view class="restroom-meta"><text wx:if="{{station.primaryRestroom.access}}">{{station.primaryRestroom.access}}</text><text wx:if="{{station.primaryRestroom.facility}}">{{station.primaryRestroom.facility}}</text></view>
+          <view class="restroom-meta"><text wx:if="{{station.primaryRestroom.access}}" class="restroom-meta__item">{{station.primaryRestroom.access}}</text><text wx:if="{{station.primaryRestroom.facility}}" class="restroom-meta__item">{{station.primaryRestroom.facility}}</text></view>
           <view wx:if="{{station.restroomCount > 1}}" class="view-all" data-station-id="{{station.id}}" catchtap="onOpenRestroomDrawer"><text>另有 {{station.restroomCount - 1}} 处</text><text>查看全部 ›</text></view>
         </view>
         <view wx:else class="empty-station-card {{station.isActive ? 'empty-station-card--active' : ''}}"><text class="station-name">{{station.name}}</text><text class="empty-text">暂无厕所记录</text></view>
@@ -63,6 +66,12 @@
   <view wx:if="{{showStationPicker}}" class="overlay" bindtap="onCloseStationPicker">
     <view class="picker-sheet" catchtap="onStopPropagation"><view class="sheet-handle"></view><view class="sheet-title">选择计算起点</view>
       <scroll-view class="picker-list" scroll-y><view wx:for="{{stations}}" wx:for-item="station" wx:key="id" class="picker-item {{station.id === originStationId ? 'picker-item--selected' : ''}}" data-station-id="{{station.id}}" bindtap="onSelectOriginStation"><text>{{station.name}}</text><text wx:if="{{station.id === originStationId}}" class="selected-mark">✓</text></view></scroll-view>
+    </view>
+  </view>
+  <view wx:if="{{showLocationCandidates}}" class="overlay" bindtap="onCloseLocationCandidates">
+    <view class="picker-sheet location-sheet" catchtap="onStopPropagation"><view class="sheet-handle"></view><view class="sheet-title">你可能在这些站点</view><text class="sheet-subtitle">请选择当前所在的线路，确认后才会更新计算起点</text>
+      <scroll-view class="picker-list location-candidate-list" scroll-y><view wx:for="{{locationCandidates}}" wx:for-item="candidate" wx:key="lineStationId" class="picker-item location-candidate" data-station-id="{{candidate.lineStationId}}" bindtap="onSelectLocationCandidate"><view><text class="candidate-station">{{candidate.stationName}}</text><text class="candidate-line">{{candidate.lineName}}</text></view><text class="candidate-distance">{{candidate.distanceLabel}}</text></view></scroll-view>
+      <view class="location-manual-action" bindtap="onChooseManualLocation">改为手动选择</view>
     </view>
   </view>
   <view wx:if="{{showRestroomDrawer}}" class="overlay" bindtap="onCloseRestroomDrawer">
