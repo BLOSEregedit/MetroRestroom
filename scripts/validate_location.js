@@ -8,7 +8,12 @@ const {
   openLocationSettings,
 } = require('../miniprogram/utils/location-service');
 const restroomData = require('../miniprogram/data/generated/restrooms');
-const { canGenerateSameNameTransfer } = require('../miniprogram/data/topology');
+const stationLocationData = require('../miniprogram/data/station-locations');
+const {
+  LINES,
+  canGenerateSameNameTransfer,
+  normalizeStationName,
+} = require('../miniprogram/data/topology');
 const catalog = require('../miniprogram/data/catalog');
 
 function wxMock(handlers) {
@@ -45,6 +50,40 @@ async function validate() {
   }
   assert.strictEqual(activeRecords.length, 518);
   assert.strictEqual(new Set(activeRecords.map((record, index) => find(index))).size, 411);
+  assert.strictEqual(stationLocationData.dataReady, true);
+  assert.strictEqual(stationLocationData.stations.length, 411);
+  const locationByLineStationId = Object.create(null);
+  stationLocationData.stations.forEach((station) => {
+    assert(Number.isFinite(station.latitude));
+    assert(Number.isFinite(station.longitude));
+    assert.strictEqual(station.coordinateSystem, 'WGS84');
+    station.lineStationIds.forEach((lineStationId) => {
+      assert(!locationByLineStationId[lineStationId], `坐标重复覆盖 ${lineStationId}`);
+      locationByLineStationId[lineStationId] = station;
+    });
+  });
+  assert.strictEqual(Object.keys(locationByLineStationId).length, 518);
+
+  const routeEdgeDistances = [];
+  restroomData.lines.forEach((line) => {
+    const records = (line.records || []).filter((record) => record.status === 'active');
+    LINES[line.lineId].routes.forEach((route) => {
+      const routeRecords = route.stationNames.map((stationName) => records.find((record) => (
+        normalizeStationName(record.stationName, record.lineId)
+          === normalizeStationName(stationName, record.lineId)
+      ))).filter(Boolean);
+      routeRecords.forEach((record, index) => {
+        if (!index) return;
+        routeEdgeDistances.push(haversineMeters(
+          locationByLineStationId[routeRecords[index - 1].lineStationId],
+          locationByLineStationId[record.lineStationId],
+        ));
+      });
+    });
+  });
+  assert.strictEqual(routeEdgeDistances.length, 561);
+  assert(Math.min.apply(null, routeEdgeDistances) >= 500);
+  assert(Math.max.apply(null, routeEdgeDistances) <= 10000);
   assert.strictEqual(catalog.getLocationCandidateOptions({
     physicalStationId: 'physical-people-square',
     lineStationIds: ['l1-s016', 'l2-s019', 'l8-s015'],
@@ -113,7 +152,7 @@ async function validate() {
     openSetting: ({ success }) => success({ authSetting: { 'scope.userLocation': true } }),
   });
   assert.strictEqual(await openLocationSettings(settingApi), true);
-  console.log('定位逻辑验收通过：距离、歧义、站外、授权、拒绝、超时和设置恢复。');
+  console.log('定位逻辑验收通过：411 个物理站、561 条路线边、距离、歧义、站外、授权、拒绝、超时和设置恢复。');
 }
 
 validate().catch((error) => {

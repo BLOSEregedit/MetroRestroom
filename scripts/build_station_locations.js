@@ -7,6 +7,7 @@ const {
   canGenerateSameNameTransfer,
   normalizeStationName,
 } = require('../miniprogram/data/topology');
+const { haversineMeters } = require('../miniprogram/utils/location');
 
 const projectRoot = path.resolve(__dirname, '..');
 const snapshotPath = path.join(projectRoot, 'data', 'osm-shanghai-metro.snapshot.json');
@@ -14,6 +15,7 @@ const overridePath = path.join(projectRoot, 'data', 'station-coordinate-override
 const outputPath = path.join(projectRoot, 'miniprogram', 'data', 'station-locations.js');
 const EXPECTED_ACTIVE_LINE_STATIONS = 518;
 const EXPECTED_PHYSICAL_STATIONS = 411;
+const MAX_AUTO_CLUSTER_DIAMETER_METERS = 500;
 
 function matchName(value) {
   return String(value || '')
@@ -93,9 +95,52 @@ function elementKey(element) {
   return `${element.type}/${element.id}`;
 }
 
+function clusterDiameter(elements) {
+  let diameter = 0;
+  for (let left = 0; left < elements.length; left += 1) {
+    for (let right = left + 1; right < elements.length; right += 1) {
+      diameter = Math.max(diameter, haversineMeters(
+        elementPosition(elements[left]),
+        elementPosition(elements[right]),
+      ));
+    }
+  }
+  return diameter;
+}
+
+function selectMedoid(elements) {
+  return elements.map((element) => ({
+    element,
+    totalDistance: elements.reduce((total, other) => (
+      total + haversineMeters(elementPosition(element), elementPosition(other))
+    ), 0),
+  })).sort((left, right) => (
+    left.totalDistance - right.totalDistance
+      || elementKey(left.element).localeCompare(elementKey(right.element))
+  ))[0].element;
+}
+
 function sourceDate(snapshot) {
   const timestamp = snapshot.osm3s && snapshot.osm3s.timestamp_osm_base || '';
   return timestamp ? String(timestamp).slice(0, 10) : '';
+}
+
+function isActiveOsmElement(element) {
+  const tags = element.tags || {};
+  const names = [tags.name, tags['name:zh'], tags.official_name].join('');
+  return !tags.construction && tags.railway !== 'construction' && names.indexOf('在建') < 0;
+}
+
+function preferShanghaiMetro(elements) {
+  const preferred = elements.filter((element) => {
+    const tags = element.tags || {};
+    return /上海地铁|Shanghai Metro/i.test([
+      tags.network,
+      tags['network:zh'],
+      tags['network:en'],
+    ].filter(Boolean).join(' '));
+  });
+  return preferred.length ? preferred : elements;
 }
 
 function build() {
@@ -106,7 +151,9 @@ function build() {
   const groups = physicalGroups(records);
   const elements = (snapshot.elements || []).filter((element) => {
     const position = elementPosition(element);
-    return Number.isFinite(position.latitude) && Number.isFinite(position.longitude);
+    return isActiveOsmElement(element)
+      && Number.isFinite(position.latitude)
+      && Number.isFinite(position.longitude);
   }).sort((left, right) => elementKey(left).localeCompare(elementKey(right)));
   const byElementKey = Object.create(null);
   elements.forEach((element) => { byElementKey[elementKey(element)] = element; });
@@ -126,21 +173,28 @@ function build() {
     let matches = overrideKey ? [byElementKey[overrideKey]].filter(Boolean) : elements.filter((element) => (
       candidateNames(element).some((name) => group.matchNames.includes(name))
     ));
-    matches = matches.filter((element) => !usedElements[elementKey(element)] || overrideKey);
+    if (!overrideKey) matches = preferShanghaiMetro(matches);
+    matches = matches.filter((element) => !usedElements[elementKey(element)]);
     if (!matches.length) {
       unmatched.push(group);
       return null;
     }
-    if (matches.length > 1) {
-      ambiguous.push({ group, matches: matches.map(elementKey) });
+    const diameter = clusterDiameter(matches);
+    if (matches.length > 1 && diameter > MAX_AUTO_CLUSTER_DIAMETER_METERS) {
+      ambiguous.push({
+        group,
+        diameterMeters: Math.round(diameter),
+        matches: matches.map(elementKey),
+      });
       return null;
     }
-    const element = matches[0];
-    usedElements[elementKey(element)] = true;
+    const element = selectMedoid(matches);
+    matches.forEach((match) => { usedElements[elementKey(match)] = true; });
     return Object.assign({}, group, elementPosition(element), {
       coordinateSystem: 'WGS84',
       osmType: element.type,
       osmId: element.id,
+      osmElements: matches.map(elementKey),
     });
   }).filter(Boolean);
 
