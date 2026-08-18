@@ -51,11 +51,9 @@ Page({
     this.setData({ recentRecords: [] });
   },
   onOpenCorrection() {
-    wx.showModal({
-      title: "反馈数据问题",
-      content: "纠错表单将在云开发阶段接入；从首页厕所卡片进入时会自动带入线路和站点。",
-      showCancel: false,
-    });
+    const app = getApp();
+    app.globalData.pendingCorrectionContext = null;
+    wx.navigateTo({ url: "/pages/correction/index" });
   },
   openAbout() { wx.navigateTo({ url: "/pages/profile/about/index" }); }
 });

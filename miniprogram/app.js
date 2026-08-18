@@ -1,13 +1,23 @@
-// app.js
+const restroomData = require('./data/generated/restrooms');
+const {
+  checkDataVersion,
+  initCloud,
+} = require('./utils/cloud-service');
+
 App({
+  globalData: {
+    env: 'metro-restroom-d4goyb1fq3f9df0b3',
+    cloudReady: false,
+    dataVersionStatus: null,
+    pendingCorrectionContext: null,
+  },
+
   onLaunch: function () {
-    this.globalData = { env: "" };
-    // 原型阶段使用本地数据；配置环境 ID 后再启用云开发。
-    if (wx.cloud && this.globalData.env) {
-      wx.cloud.init({
-        env: this.globalData.env,
-        traceUser: true,
-      });
-    }
+    this.globalData.cloudReady = initCloud();
+    if (!this.globalData.cloudReady) return;
+
+    checkDataVersion(restroomData.source.sha256)
+      .then((status) => { this.globalData.dataVersionStatus = status; })
+      .catch(() => { this.globalData.dataVersionStatus = { available: false }; });
   },
 });

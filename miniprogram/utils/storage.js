@@ -2,6 +2,7 @@ const STORAGE_KEYS = Object.freeze({
   preferences: "metroRestroom:preferences",
   recentRecords: "metroRestroom:recentRecords",
   lastLocationStation: "metroRestroom:lastLocationStation",
+  correctionDraft: "metroRestroom:correctionDraft",
 });
 
 const DEFAULT_PREFERENCES = Object.freeze({
@@ -140,6 +141,25 @@ function clearLastLocationStation() {
   return null;
 }
 
+function getCorrectionDraft() {
+  const stored = readStorage(STORAGE_KEYS.correctionDraft);
+  return isPlainObject(stored) ? Object.assign({}, stored) : null;
+}
+
+function saveCorrectionDraft(draft) {
+  if (!isPlainObject(draft) || !isPlainObject(draft.context)) {
+    throw new TypeError("纠错草稿必须包含 context");
+  }
+  const next = Object.assign({}, draft, { updatedAt: Date.now() });
+  writeStorage(STORAGE_KEYS.correctionDraft, next);
+  return next;
+}
+
+function clearCorrectionDraft() {
+  removeStorage(STORAGE_KEYS.correctionDraft);
+  return null;
+}
+
 module.exports = {
   STORAGE_KEYS,
   DEFAULT_PREFERENCES,
@@ -152,4 +172,7 @@ module.exports = {
   getLastLocationStation,
   saveLastLocationStation,
   clearLastLocationStation,
+  getCorrectionDraft,
+  saveCorrectionDraft,
+  clearCorrectionDraft,
 };

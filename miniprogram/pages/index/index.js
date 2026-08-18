@@ -560,15 +560,25 @@ Page({
     this.setData({ showRestroomDrawer: false });
   },
 
-  onCorrectRestroom() {
-    const station = this.data.drawerStation;
-    wx.showModal({
-      title: '反馈数据问题',
-      content: station
-        ? `已带入${this.data.lineName}、${station.name}和当前厕所信息。纠错提交将在云开发阶段接入。`
-        : '纠错提交将在云开发阶段接入。',
-      showCancel: false,
-    });
+  onCorrectRestroom(event) {
+    const dataset = (event.currentTarget && event.currentTarget.dataset) || {};
+    const stationId = dataset.stationId || (this.data.drawerStation && this.data.drawerStation.id);
+    const station = (this._rawStations || []).find((item) => item.id === stationId)
+      || this.data.drawerStation;
+    if (!station) return;
+    const restroom = (station.restrooms || []).find((item) => item.id === dataset.restroomId)
+      || station.primaryRestroom
+      || (station.restrooms || [])[0];
+    if (!restroom) return;
+
+    const app = getApp();
+    app.globalData.pendingCorrectionContext = {
+      lineId: restroom.lineId || this._state.lineId,
+      stationId: String(restroom.id || '').replace(/-restroom$/, ''),
+      restroomId: restroom.id,
+    };
+    this.setData({ showRestroomDrawer: false });
+    wx.navigateTo({ url: '/pages/correction/index' });
   },
 
   onStopPropagation() {},

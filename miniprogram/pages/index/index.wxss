@@ -47,6 +47,7 @@
 .eta-label { color: #e05858; font-weight: 700; }
 .restroom-meta { justify-content: flex-start; gap: 12rpx; margin-top: 12rpx; color: #7c858f; font-size: 22rpx; }
 .restroom-meta__item + .restroom-meta__item { padding-left: 12rpx; border-left: 1rpx solid #d9dde0; }
+.restroom-feedback-link { margin-left: auto; color: #bd5555; }
 .view-all { margin-top: 16rpx; padding-top: 14rpx; border-top: 1rpx solid #edf0f2; color: #5c6771; font-size: 22rpx; }
 .empty-station-card { display: flex; min-height: 112rpx; align-items: center; justify-content: space-between; padding: 22rpx 26rpx; background: #e8ebed; }
 .empty-text { color: #929aa2; font-size: 22rpx; }
@@ -82,4 +83,5 @@
 .facility-label { padding: 4rpx 10rpx; border-radius: 999rpx; background: #e7ebee; color: #64707a; font-size: 20rpx; }
 .drawer-location,.drawer-access { display: block; margin-top: 10rpx; color: #5f6871; font-size: 24rpx; }
 .drawer-access { color: #8a929a; font-size: 22rpx; }
-.drawer-feedback { display: flex; min-height: 82rpx; align-items: center; justify-content: space-between; margin-top: 10rpx; padding: 0 6rpx; border-top: 1rpx solid #edf0f2; color: #c54d4d; font-size: 25rpx; }
+.drawer-item__actions { display: flex; align-items: center; gap: 18rpx; }
+.drawer-feedback-link { color: #bd5555; font-size: 22rpx; }

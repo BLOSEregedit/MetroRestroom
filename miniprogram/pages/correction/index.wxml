@@ -1,0 +1,47 @@
+<view class="correction-page">
+  <view class="context-card">
+    <view class="context-title">反馈对象</view>
+    <view class="picker-row">
+      <text class="picker-label">线路</text>
+      <picker mode="selector" range="{{lineOptions}}" range-key="name" value="{{lineIndex}}" bindchange="onLineChange">
+        <view class="picker-value">{{lineOptions[lineIndex].name}} <text class="chevron">›</text></view>
+      </picker>
+    </view>
+    <view class="divider"></view>
+    <view class="picker-row">
+      <text class="picker-label">站点</text>
+      <picker mode="selector" range="{{stationOptions}}" range-key="name" value="{{stationIndex}}" bindchange="onStationChange">
+        <view class="picker-value">{{stationOptions[stationIndex].name}} <text class="chevron">›</text></view>
+      </picker>
+    </view>
+    <view wx:if="{{context.location}}" class="restroom-context">
+      <text>{{context.location}}</text>
+      <text wx:if="{{context.access}}" class="access-text">{{context.access}}</text>
+    </view>
+  </view>
+
+  <view class="section-title">问题类型</view>
+  <radio-group class="issue-card" bindchange="onIssueChange">
+    <label wx:for="{{issueOptions}}" wx:key="value" class="issue-row">
+      <text>{{item.label}}</text>
+      <radio value="{{item.value}}" checked="{{issueType === item.value}}" color="#D84A4A" />
+    </label>
+  </radio-group>
+
+  <view class="section-title">补充说明</view>
+  <view class="input-card">
+    <textarea class="description-input" value="{{description}}" maxlength="300" placeholder="例如：应为 3 号口外，不是 2 号口外" bindinput="onDescriptionInput" />
+    <text class="count-text">{{descriptionCount}}／300</text>
+  </view>
+  <text class="field-tip">请填写 5—300 字，说明需要修改的内容</text>
+
+  <view class="section-title">联系方式（选填）</view>
+  <view class="input-card single-input-card">
+    <input value="{{contact}}" maxlength="100" placeholder="手机号、邮箱或其他联系方式" bindinput="onContactInput" />
+  </view>
+  <text class="field-tip">方便核实后联系你，不填也可以</text>
+
+  <view wx:if="{{errorMessage}}" class="error-message">{{errorMessage}}</view>
+  <button class="submit-button" disabled="{{isSubmitDisabled}}" loading="{{submitting}}" bindtap="onSubmit">{{submitting ? '提交中…' : '提交反馈'}}</button>
+  <text class="privacy-note">无需登录即可提交。我们仅使用微信匿名身份识别重复提交、限制滥用和跟进审核；联系方式仅在你主动填写时收集，用于核实反馈，不会公开展示。</text>
+</view>
