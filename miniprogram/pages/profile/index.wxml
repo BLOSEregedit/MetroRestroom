@@ -1,17 +1,19 @@
 <view class="profile-page">
-  <view class="profile-header"><view class="brand-mark">针</view><view><view class="profile-title">我的</view><view class="profile-subtitle">偏好与使用记录</view></view></view>
+  <view class="profile-header"><image class="brand-mark" src="/images/logo.png" mode="aspectFit" /><view><view class="profile-title">我的</view><view class="profile-subtitle">偏好与使用记录</view></view></view>
   <view class="section-heading"><view class="section-title">最近记录</view><text wx:if="{{recentRecords.length}}" class="clear-action" bindtap="onClearRecent">清空</text></view>
   <view wx:if="{{!recentRecords.length}}" class="empty-card"><view class="empty-icon">⌁</view><view class="empty-title">还没有最近记录</view><view class="empty-description">设置锚点或查看厕所信息后，会显示在这里</view></view>
   <view wx:else class="settings-card recent-card">
     <view wx:for="{{recentRecords}}" wx:key="stationId" class="recent-row" data-index="{{index}}" bindtap="onOpenRecent">
       <view><view class="setting-title">{{item.stationName}}</view><view class="setting-description">{{item.lineName}} · {{item.action}}</view></view><view class="chevron">›</view>
     </view>
+    <view wx:if="{{recentTotal > recentRecords.length && !recentExpanded}}" class="recent-toggle" bindtap="onToggleRecent">查看全部 {{recentTotal}} 条</view>
+    <view wx:elif="{{recentExpanded}}" class="recent-toggle" bindtap="onToggleRecent">收起</view>
   </view>
   <view class="section-title">偏好设置</view>
   <view class="settings-card">
-    <view class="setting-row"><view><view class="setting-title">拨轮音效</view><view class="setting-description">吸附到站点时播放轻提示音</view></view><switch checked="{{soundEnabled}}" color="#D84A4A" bindchange="onSoundChange" /></view>
+    <view class="setting-row"><view><view class="setting-title">拨轮音效</view><view class="setting-description">吸附到站点时播放轻提示音</view></view><switch checked="{{soundEnabled}}" color="#007AFF" bindchange="onSoundChange" /></view>
     <view class="divider"></view>
-    <view class="setting-row"><view><view class="setting-title">触感反馈</view><view class="setting-description">操作拨轮时提供轻微震动</view></view><switch checked="{{vibrationEnabled}}" color="#D84A4A" bindchange="onVibrationChange" /></view>
+    <view class="setting-row"><view><view class="setting-title">触感反馈</view><view class="setting-description">操作拨轮时提供轻微震动</view></view><switch checked="{{vibrationEnabled}}" color="#007AFF" bindchange="onVibrationChange" /></view>
   </view>
   <view class="section-title">数据纠错</view>
   <view class="settings-card correction-row" bindtap="onOpenCorrection"><view><view class="setting-title">反馈数据问题</view><view class="setting-description">纠正厕所位置、闸内外或设施信息</view></view><view class="chevron">›</view></view>

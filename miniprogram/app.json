@@ -23,7 +23,7 @@
   "requiredPrivateInfos": ["getLocation"],
   "tabBar": {
     "color": "#8A8A8A",
-    "selectedColor": "#D84A4A",
+    "selectedColor": "#007AFF",
     "backgroundColor": "#FFFFFF",
     "borderStyle": "white",
     "list": [
