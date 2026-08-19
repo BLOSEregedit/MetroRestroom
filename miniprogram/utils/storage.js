@@ -3,6 +3,8 @@ const STORAGE_KEYS = Object.freeze({
   recentRecords: "metroRestroom:recentRecords",
   lastLocationStation: "metroRestroom:lastLocationStation",
   correctionDraft: "metroRestroom:correctionDraft",
+  lineSyncPrefix: "metroRestroom:lineSync",
+  citySyncPrefix: "metroRestroom:citySync",
 });
 
 const DEFAULT_PREFERENCES = Object.freeze({
@@ -31,8 +33,6 @@ function readStorage(key) {
 }
 
 function writeStorage(key, value) {
-  memoryStorage[key] = value;
-
   if (typeof wx !== "undefined" && typeof wx.setStorageSync === "function") {
     try {
       wx.setStorageSync(key, value);
@@ -41,12 +41,11 @@ function writeStorage(key, value) {
     }
   }
 
+  memoryStorage[key] = value;
   return true;
 }
 
 function removeStorage(key) {
-  delete memoryStorage[key];
-
   if (typeof wx !== "undefined" && typeof wx.removeStorageSync === "function") {
     try {
       wx.removeStorageSync(key);
@@ -55,11 +54,205 @@ function removeStorage(key) {
     }
   }
 
+  delete memoryStorage[key];
   return true;
 }
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function cloneValue(value) {
+  if (value === undefined) return undefined;
+  return JSON.parse(JSON.stringify(value));
+}
+
+function normalizeStorageId(value, label) {
+  const normalized = String(value || "").trim();
+  if (!normalized || !/^[a-zA-Z0-9_-]+$/.test(normalized)) {
+    throw new TypeError(`${label}格式不正确`);
+  }
+  return normalized;
+}
+
+function cityLineSyncStorageKey(cityId) {
+  return `${STORAGE_KEYS.lineSyncPrefix}:${normalizeStorageId(cityId, "cityId")}`;
+}
+
+function legacyLineSyncStorageKey(cityId, lineId) {
+  return `${cityLineSyncStorageKey(cityId)}:${normalizeStorageId(lineId, "lineId")}`;
+}
+
+function citySyncStorageKey(cityId) {
+  return `${STORAGE_KEYS.citySyncPrefix}:${normalizeStorageId(cityId, "cityId")}`;
+}
+
+function normalizeTimestamp(value) {
+  const timestamp = Number(value);
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : 0;
+}
+
+function overrideExpiresAt(override) {
+  if (!isPlainObject(override)) return 0;
+  const raw = override.expiresAtMs !== undefined
+    ? override.expiresAtMs
+    : override.expiresAt;
+  if (raw === undefined || raw === null || raw === "") return 0;
+  const numeric = Number(raw);
+  if (Number.isFinite(numeric)) return numeric;
+  const parsed = Date.parse(String(raw));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function overrideEffectiveFrom(override) {
+  if (!isPlainObject(override)) return 0;
+  const raw = override.effectiveFromMs;
+  if (raw === undefined || raw === null || raw === "") return 0;
+  const numeric = Number(raw);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function filterActiveOverrides(overrides, nowMs) {
+  const now = normalizeTimestamp(nowMs) || Date.now();
+  return (Array.isArray(overrides) ? overrides : []).filter((override) => {
+    if (!isPlainObject(override)) return false;
+    const effectiveFrom = overrideEffectiveFrom(override);
+    const expiresAt = overrideExpiresAt(override);
+    return (!effectiveFrom || effectiveFrom <= now) && (!expiresAt || expiresAt > now);
+  }).map((override) => cloneValue(override));
+}
+
+function readCityLineSyncState(cityId) {
+  const normalizedCityId = normalizeStorageId(cityId, "cityId");
+  const stored = readStorage(cityLineSyncStorageKey(normalizedCityId));
+  return {
+    cityId: normalizedCityId,
+    lines: isPlainObject(stored) && isPlainObject(stored.lines)
+      ? cloneValue(stored.lines)
+      : {},
+  };
+}
+
+function normalizeLineSyncState(state, cityId, lineId) {
+  if (!isPlainObject(state)) throw new TypeError("线路同步状态必须是对象");
+  const normalizedCityId = normalizeStorageId(state.cityId || cityId, "cityId");
+  const normalizedLineId = normalizeStorageId(state.lineId || lineId, "lineId");
+  if (state.bundleSchema === undefined || state.bundleSchema === null || state.bundleSchema === "") {
+    throw new TypeError("线路同步状态必须包含 bundleSchema");
+  }
+  if (state.overrides !== undefined && !Array.isArray(state.overrides)) {
+    throw new TypeError("线路同步状态 overrides 必须是数组");
+  }
+  return {
+    cityId: normalizedCityId,
+    lineId: normalizedLineId,
+    version: typeof state.version === "string" ? state.version : "",
+    lastAlignedAt: normalizeTimestamp(state.lastAlignedAt),
+    nextRetryAt: normalizeTimestamp(state.nextRetryAt),
+    ttlSeconds: Number(state.ttlSeconds) > 0 ? Number(state.ttlSeconds) : 0,
+    bundleSchema: cloneValue(state.bundleSchema),
+    overrides: (state.overrides || []).filter(isPlainObject).map((override) => cloneValue(override)),
+  };
+}
+
+function getLineSyncState(cityId, lineId, options) {
+  const normalizedCityId = normalizeStorageId(cityId, "cityId");
+  const normalizedLineId = normalizeStorageId(lineId, "lineId");
+  const cityState = readCityLineSyncState(normalizedCityId);
+  const stored = cityState.lines[normalizedLineId]
+    || readStorage(legacyLineSyncStorageKey(normalizedCityId, normalizedLineId));
+  if (!isPlainObject(stored)) return null;
+
+  const expectedBundleSchema = options && options.bundleSchema;
+  if (expectedBundleSchema !== undefined
+    && String(stored.bundleSchema) !== String(expectedBundleSchema)) {
+    return null;
+  }
+
+  return {
+    cityId: String(stored.cityId || normalizedCityId),
+    lineId: String(stored.lineId || normalizedLineId),
+    version: typeof stored.version === "string" ? stored.version : "",
+    lastAlignedAt: normalizeTimestamp(stored.lastAlignedAt),
+    nextRetryAt: normalizeTimestamp(stored.nextRetryAt),
+    ttlSeconds: Number(stored.ttlSeconds) > 0 ? Number(stored.ttlSeconds) : 0,
+    bundleSchema: stored.bundleSchema,
+    overrides: options && options.includeInactive
+      ? cloneValue(Array.isArray(stored.overrides) ? stored.overrides : [])
+      : filterActiveOverrides(stored.overrides, options && options.nowMs),
+  };
+}
+
+function saveLineSyncStates(cityId, states) {
+  const current = readCityLineSyncState(cityId);
+  if (!Array.isArray(states) || !states.length) {
+    throw new TypeError("批量线路同步状态不能为空");
+  }
+  const normalizedStates = states.map((state) => {
+    const normalized = normalizeLineSyncState(state, current.cityId, state && state.lineId);
+    if (normalized.cityId !== current.cityId) throw new TypeError("批量线路 cityId 必须一致");
+    return normalized;
+  });
+  const nextLines = cloneValue(current.lines);
+  normalizedStates.forEach((state) => { nextLines[state.lineId] = state; });
+  const next = { cityId: current.cityId, lines: nextLines };
+  if (!writeStorage(cityLineSyncStorageKey(current.cityId), next)) {
+    throw new Error("批量线路同步状态写入失败");
+  }
+  return cloneValue(normalizedStates);
+}
+
+function saveLineSyncState(state) {
+  return saveLineSyncStates(state && state.cityId, [state])[0];
+}
+
+function clearLineSyncState(cityId, lineId) {
+  const current = readCityLineSyncState(cityId);
+  const normalizedLineId = normalizeStorageId(lineId, "lineId");
+  const nextLines = cloneValue(current.lines);
+  delete nextLines[normalizedLineId];
+  const citySaved = writeStorage(cityLineSyncStorageKey(current.cityId), {
+    cityId: current.cityId,
+    lines: nextLines,
+  });
+  if (!citySaved) return false;
+  return removeStorage(legacyLineSyncStorageKey(current.cityId, normalizedLineId));
+}
+
+function getCitySyncState(cityId) {
+  const normalizedCityId = normalizeStorageId(cityId, "cityId");
+  const stored = readStorage(citySyncStorageKey(normalizedCityId));
+  return {
+    cityId: normalizedCityId,
+    lastManualSuccessAt: isPlainObject(stored)
+      ? normalizeTimestamp(stored.lastManualSuccessAt)
+      : 0,
+    manualBlockedUntil: isPlainObject(stored)
+      ? normalizeTimestamp(stored.manualBlockedUntil)
+      : 0,
+  };
+}
+
+function saveCitySyncState(cityId, patch) {
+  const current = getCitySyncState(cityId);
+  const input = isPlainObject(patch) ? patch : {};
+  const next = {
+    cityId: current.cityId,
+    lastManualSuccessAt: input.lastManualSuccessAt === undefined
+      ? current.lastManualSuccessAt
+      : normalizeTimestamp(input.lastManualSuccessAt),
+    manualBlockedUntil: input.manualBlockedUntil === undefined
+      ? current.manualBlockedUntil
+      : normalizeTimestamp(input.manualBlockedUntil),
+  };
+  if (!writeStorage(citySyncStorageKey(current.cityId), next)) {
+    throw new Error("城市同步状态写入失败");
+  }
+  return cloneValue(next);
+}
+
+function clearCitySyncState(cityId) {
+  return removeStorage(citySyncStorageKey(cityId));
 }
 
 function getPreferences() {
@@ -175,4 +368,12 @@ module.exports = {
   getCorrectionDraft,
   saveCorrectionDraft,
   clearCorrectionDraft,
+  getLineSyncState,
+  saveLineSyncState,
+  saveLineSyncStates,
+  clearLineSyncState,
+  getCitySyncState,
+  saveCitySyncState,
+  clearCitySyncState,
+  filterActiveOverrides,
 };

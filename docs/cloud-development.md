@@ -20,7 +20,7 @@
 
 用于检查本地数据是否存在更新。集合权限设为“仅管理端可读写”。
 
-固定文档 `_id = restroom-data`：
+当前已部署的兼容文档 `_id = restroom-data`：
 
 ```json
 {
@@ -31,7 +31,48 @@
 }
 ```
 
-首版只提示版本状态，不在线覆盖本地基础数据。
+当前已部署版本只提示全局版本状态，不在线覆盖本地基础数据；目标方案上线后保留该文档仅用于兼容旧客户端。
+
+同步方案在同一集合中使用一份城市 manifest 和不可变线路快照。线路、站点和换乘拓扑不进入快照，继续随小程序打包；线路快照只保存厕所数据的当前低频覆盖集合，而不是增量事件流或实时运营数据。
+
+城市 manifest 的文档 ID 固定为 `sync_manifest_shanghai`：
+
+```json
+{
+  "_id": "sync_manifest_shanghai",
+  "cityId": "shanghai",
+  "schemaVersion": 1,
+  "ttlSeconds": 43200,
+  "lineVersions": {
+    "2": "sha256v12",
+    "8": "sha256v8"
+  },
+  "updatedAt": "服务端时间"
+}
+```
+
+线路快照的文档 ID 固定为 `sync_line_shanghai_<lineId>_<version>`。快照一经发布不得原地修改；任何内容变化都生成新版本文档，最后再更新 manifest：
+
+```json
+{
+  "_id": "sync_line_shanghai_8_sha256v8",
+  "cityId": "shanghai",
+  "lineId": "8",
+  "version": "sha256v8",
+  "schemaVersion": 1,
+  "overrides": [
+    {
+      "restroomId": "l8-s010-restroom",
+      "restroomStatus": "maintenance",
+      "reason": "临时维护",
+      "effectiveFromMs": 1787000000000,
+      "expiresAtMs": 1787086400000
+    }
+  ]
+}
+```
+
+线路 `version` 是长度不超过 64、仅含字母、数字、下划线或连字符的安全不透明字符串，可使用规范化 `overrides` 的 SHA-256；若采用哈希，输入不包含 `_id` 和 `version`，避免自引用。`restroomStatus` 仅允许 `maintenance`、`closed`、`unknown`；某厕所没有覆盖记录时表示正常沿用本地数据。`reason`、`effectiveFromMs`、`expiresAtMs` 均可省略，时间存在时必须为正安全整数，且结束时间必须晚于开始时间。每条线路最多包含 128 条覆盖，`restroomId` 最长 80 个字符，`reason` 最长 120 个字符。单站更新只发布受影响线路的新快照；换乘站共享厕所影响多条线路时，为每条相关线路发布新快照并一起更新 manifest。
 
 ### `correction_reports`
 
@@ -86,6 +127,93 @@
 - `submitCorrection`：校验字段、执行匿名限流、按 `requestId` 幂等写入待审核记录。
 
 云函数只返回公开状态码和反馈编号，不返回 `OPENID`、数据库错误详情或其他用户数据。
+
+## 已确认待实施的同步机制
+
+### 自动检查
+
+- 小程序启动和重新进入前台时先读取本地同步元数据，不直接发起云函数请求。
+- 自动检查以 `lastAlignedAt` 为准；距上次成功核对不足 12 小时不请求，超过 12 小时才异步检查。
+- 首屏、路径和预计耗时先使用本地数据计算并展示，检查过程不得阻塞查询。
+- 当前查询跨线路时，只把路径涉及且缓存缺失或过期的线路合并为一次请求；同一次检查使用 single-flight，避免并发重复调用。
+- 云端版本一致或新数据完整应用后，才更新相关线路的 `lastAlignedAt`；失败不得更新时间或覆盖旧缓存。
+
+当前 `metroRestroomApi` 函数代码已扩展：
+
+- `syncRestroomStatus`：接收城市、相关线路及本地版本，一次读取城市线路版本清单，只返回发生变化的线路快照。
+- 路径和 ETA 在客户端本地计算；云函数不为每次起终点或厕所查询实时计算耗时。
+
+请求结构：
+
+```json
+{
+  "action": "syncRestroomStatus",
+  "payload": {
+    "schemaVersion": 1,
+    "cityId": "shanghai",
+    "lines": [
+      { "lineId": "2", "version": "sha256v12" },
+      { "lineId": "8", "version": "" }
+    ]
+  }
+}
+```
+
+`schemaVersion` 当前只接受 `1`，`cityId` 当前只接受 `shanghai`。`lines` 必须包含 1—20 条已知线路且不得重复；`version` 必须是字符串，首次同步使用空字符串，非空值遵循线路版本字符限制。自动检查只提交当前派生路径中缓存缺失或已超过 12 小时的线路；手动检查在城市级 5 分钟冷却允许时，可提交当前路径的全部线路以强制核对。拨轮中心站是当前查询的派生目标站；客户端本地计算从起点到该站的完整路径，并提交去重后的途经线路。
+
+成功响应结构：
+
+```json
+{
+  "schemaVersion": 1,
+  "cityId": "shanghai",
+  "checkedAtMs": 1787000000000,
+  "ttlSeconds": 43200,
+  "unchangedLineIds": ["2"],
+  "changedLines": [
+    {
+      "lineId": "8",
+      "version": "sha256v8",
+      "overrides": []
+    }
+  ]
+}
+```
+
+`checkedAtMs` 必须由云函数使用服务端时间生成。`schemaVersion: 1` 的 `ttlSeconds` 固定为 43200 秒，manifest 缺少该字段时仍按 43200 秒处理，任何其他数值均视为云端数据未就绪并整批返回 `DATA_NOT_READY`；第一版客户端也不得用其他值改变 12 小时检查周期。未来如需动态 TTL，必须升级 `schemaVersion` 并重新定义客户端兼容规则。云函数先读取 manifest，再读取本次所有发生变化的不可变快照；请求线路未出现在 manifest，或 manifest 引用的任意目标快照缺失、版本不一致、结构非法时，整批返回 `DATA_NOT_READY` 和 `retryAfterSeconds: 900`，不得返回部分成功。客户端也必须先校验完整批次，再以单个城市缓存对象原子写入各线路快照；只有整批成功后，才以同一个 `checkedAtMs` 更新本次所有请求线路的 `lastAlignedAt`。
+
+### 手动检查与重试
+
+- 用户可通过明确的刷新入口主动发起检查；一次手动检查成功后进入上海城市级 5 分钟冷却期，不因切换线路或目标站绕过冷却。
+- 冷却期内点击不请求云端，提示检查已完成，并使用 `YYYY-MM-DD HH:mm` 告知下次允许检查的时间。
+- 手动请求失败不进入 5 分钟成功冷却，但设置城市级 10 秒防连点窗口；窗口结束后允许用户再次手动重试。
+- 手动检查对超时、断网和临时服务错误最多尝试 3 次（含首次），建议间隔约 2 秒、5 秒；确定性的参数或权限错误不重试。
+- 启动时的后台自动检查不做短时间连续三次重试；失败批次为相关线路分别写入 `nextRetryAt`，至少延后 15 分钟再尝试这些线路，手动检查不受该自动退避限制。
+
+### 客户端同步状态
+
+每条线路内部保存：
+
+```json
+{
+  "cityId": "shanghai",
+  "lineId": "8",
+  "version": "sha256v8",
+  "lastAlignedAt": 1787000000000,
+  "nextRetryAt": 0,
+  "ttlSeconds": 43200,
+  "bundleSchema": 1,
+  "overrides": []
+}
+```
+
+城市级同步元数据另存 `lastManualSuccessAt` 和 `manualBlockedUntil`：前者计算手动成功后的 5 分钟冷却，后者记录手动失败后的 10 秒防连点。自动失败退避由每条线路的 `nextRetryAt` 保存。`lastAlignedAt` 只取服务端成功响应的 `checkedAtMs`；快照变化时，必须在本地完整应用成功后再写入。
+
+- 当前路径涉及多条线路时，界面“最近同步”取相关线路中离现在最近的 `lastAlignedAt`；所有相关线路均在 12 小时内核对成功时才显示绿色。
+- 显示时间固定为 `YYYY-MM-DD HH:mm`，不显示数据库版本、整库更新时间或相对时间。
+- 绿色：`数据正常 · 最近同步 YYYY-MM-DD HH:mm`。
+- 橙色：`正在检查最新数据`，只在请求进行中显示。
+- 灰色：`检查失败 · 最近同步 YYYY-MM-DD HH:mm`；从未成功时显示`检查失败 · 尚未完成首次同步`。
 
 ## 上线前云端操作
 

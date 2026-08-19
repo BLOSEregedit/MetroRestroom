@@ -11,6 +11,27 @@ const {
   savePreferences,
   saveLastLocationStation,
 } = require('../../utils/storage');
+const {
+  formatDateTime,
+  getLineOverrides,
+  getSyncStatus,
+  subscribeSyncState,
+  syncLines,
+} = require('../../utils/data-sync');
+
+const SYNC_CITY_ID = 'shanghai';
+const SYNC_BUNDLE_SCHEMA = 1;
+const OPERATIONAL_STATUS_REFRESH_MS = 60 * 1000;
+const GESTURE_DECISION_PX = 12;
+const TRANSFER_SWIPE_PX = 48;
+const HORIZONTAL_GESTURE_RATIO = 1.2;
+const RESTROOM_STATUS_LABELS = Object.freeze({
+  maintenance: '维护中',
+  closed: '暂不可用',
+  unknown: '状态待确认',
+});
+const READABLE_TEXT_NEUTRAL = Object.freeze([31, 36, 41]);
+const MIN_LINE_TEXT_CONTRAST = 4.5;
 
 function getLineName(line, lineId) {
   if (typeof line === 'string') return line;
@@ -21,12 +42,60 @@ function getLineColor(line) {
   return (line && line.color) || '#1677ff';
 }
 
+function parseHexColor(color) {
+  const match = String(color || '').trim().match(/^#([0-9a-f]{6})$/i);
+  if (!match) return null;
+  return [0, 2, 4].map((offset) => parseInt(match[1].slice(offset, offset + 2), 16));
+}
+
+function colorLuminance(rgb) {
+  const channels = rgb.map((value) => {
+    const channel = value / 255;
+    return channel <= .04045
+      ? channel / 12.92
+      : ((channel + .055) / 1.055) ** 2.4;
+  });
+  return (.2126 * channels[0]) + (.7152 * channels[1]) + (.0722 * channels[2]);
+}
+
+function contrastOnWhite(rgb) {
+  return 1.05 / (colorLuminance(rgb) + .05);
+}
+
+function rgbToHex(rgb) {
+  return `#${rgb.map((value) => value.toString(16).padStart(2, '0')).join('')}`.toUpperCase();
+}
+
+function getReadableLineColor(color) {
+  const source = parseHexColor(color);
+  if (!source) return '#59626C';
+  if (contrastOnWhite(source) >= MIN_LINE_TEXT_CONTRAST) return rgbToHex(source);
+
+  let low = 0;
+  let high = 1;
+  let readable = READABLE_TEXT_NEUTRAL.slice();
+  for (let index = 0; index < 16; index += 1) {
+    const ratio = (low + high) / 2;
+    const mixed = source.map((value, channel) => Math.round(
+      value + ((READABLE_TEXT_NEUTRAL[channel] - value) * ratio),
+    ));
+    if (contrastOnWhite(mixed) >= MIN_LINE_TEXT_CONTRAST) {
+      readable = mixed;
+      high = ratio;
+    } else {
+      low = ratio;
+    }
+  }
+  return rgbToHex(readable);
+}
+
 function normalizeLineOptions(options) {
   return (options || []).map((option) => {
     if (typeof option === 'string') return { id: option, name: option };
     return Object.assign({}, option, {
       id: option.id || option.lineId,
       name: option.name || option.label || option.title || option.id || option.lineId,
+      textColor: getReadableLineColor(option.color),
     });
   });
 }
@@ -38,11 +107,14 @@ Page({
     routeId: '',
     lineName: '',
     lineColor: '#1677ff',
+    lineTextColor: '#59626C',
     directionLabel: '',
     originStationId: '',
     originStationName: '',
     stations: [],
     currentIndex: 0,
+    motionCommitVersion: 0,
+    stationPreviousMargin: '120rpx',
     isManualAnchor: false,
     soundEnabled: true,
     vibrationEnabled: true,
@@ -54,6 +126,7 @@ Page({
     showRouteSelector: false,
     drawerStation: null,
     drawerRestrooms: [],
+    drawerGroups: [],
     locationDataReady: false,
     locationStatus: 'notRequested',
     locationLabel: '尚未开启定位',
@@ -62,6 +135,9 @@ Page({
     showLocationCandidates: false,
     locationCandidates: [],
     locationIssue: '',
+    syncPhase: 'idle',
+    syncTone: 'gray',
+    syncMessage: '尚未完成首次同步',
   },
 
   onLoad() {
@@ -82,6 +158,16 @@ Page({
       vibrationEnabled: initialState.vibrationEnabled,
     });
     this._lastFeedbackIndex = null;
+    this._unsubscribeSync = subscribeSyncState((event) => {
+      if (!this._state || event.cityId !== SYNC_CITY_ID) return;
+      this._updateSyncStatus();
+      if (event.phase === 'success') {
+        const currentLineIds = this._currentSyncLineIds();
+        if ((event.lineIds || []).some((lineId) => currentLineIds.includes(lineId))) {
+          this._refreshHomeView(this._visibleStationId(), { skipSync: true });
+        }
+      }
+    });
 
     this.setData({
       lineOptions: normalizeLineOptions(catalog.getLineOptions()),
@@ -122,10 +208,23 @@ Page({
       });
     }
     this._refreshHomeView(this._visibleStationId());
+    this._startOperationalStatusClock();
+  },
+
+  onHide() {
+    this._stopOperationalStatusClock();
+  },
+
+  onResize() {
+    this._scheduleStationWheelLayout();
   },
 
   onUnload() {
     this._locationRequestToken += 1;
+    if (this._syncTimer) clearTimeout(this._syncTimer);
+    if (this._stationLayoutTimer) clearTimeout(this._stationLayoutTimer);
+    this._stopOperationalStatusClock();
+    if (this._unsubscribeSync) this._unsubscribeSync();
     if (this._feedback) this._feedback.destroy();
   },
 
@@ -187,7 +286,7 @@ Page({
       : (option.directions || []);
   },
 
-  _refreshHomeView(preferredStationId) {
+  _refreshHomeView(preferredStationId, options) {
     const homeView = this._buildHomeView();
     const rawStations = homeView.stations || [];
     const preferredIndex = rawStations.findIndex((station) => station.id === preferredStationId);
@@ -203,10 +302,12 @@ Page({
     const lineOption = this.data.lineOptions.find((item) => item.id === this._state.lineId) || {};
     const routeOptions = lineOption.routes || [];
 
+    const lineColor = getLineColor(homeView.line);
     this.setData({
       lineId: this._state.lineId,
       lineName: getLineName(homeView.line, this._state.lineId),
-      lineColor: getLineColor(homeView.line),
+      lineColor,
+      lineTextColor: getReadableLineColor(lineColor),
       directionLabel: homeView.directionLabel || '',
       originStationId: this._state.originStationId,
       originStationName: homeView.originStationName || '',
@@ -214,29 +315,175 @@ Page({
       routeOptions,
       showRouteSelector: lineOption.type === 'branched' && routeOptions.length > 1,
       currentIndex,
-      stations: this._decorateStations(rawStations, currentIndex, getLineColor(homeView.line)),
+      motionCommitVersion: (this.data.motionCommitVersion || 0) + 1,
+      stations: this._decorateStations(rawStations, currentIndex, lineColor),
     });
     this._lastFeedbackIndex = currentIndex;
+    this._scheduleStationWheelLayout();
+    this._updateSyncStatus();
+    if (!(options && options.skipSync)) this._scheduleSyncForVisibleStation(0);
+  },
+
+  _scheduleStationWheelLayout() {
+    if (!wx.createSelectorQuery) return;
+    if (this._stationLayoutTimer) clearTimeout(this._stationLayoutTimer);
+    this._stationLayoutTimer = setTimeout(() => {
+      this._stationLayoutTimer = null;
+      wx.createSelectorQuery().select('.station-swiper').boundingClientRect((rect) => {
+        if (!rect || !rect.height) return;
+        const stationPreviousMargin = `${Math.round(rect.height / 5)}px`;
+        if (stationPreviousMargin !== this.data.stationPreviousMargin) {
+          this.setData({ stationPreviousMargin });
+        }
+      }).exec();
+    }, 0);
   },
 
   _decorateStations(stations, currentIndex, lineColor) {
+    const overrideMaps = Object.create(null);
+    const getOverride = (restroom) => {
+      const lineId = restroom.lineId;
+      if (!overrideMaps[lineId]) {
+        overrideMaps[lineId] = getLineOverrides(lineId, {
+          cityId: SYNC_CITY_ID,
+          bundleSchema: SYNC_BUNDLE_SCHEMA,
+        }).reduce((result, override) => {
+          result[override.restroomId] = override;
+          return result;
+        }, Object.create(null));
+      }
+      return overrideMaps[lineId][restroom.id] || null;
+    };
     return stations.map((station, index) => {
-      const restrooms = station.restrooms || [];
+      const restrooms = (station.restrooms || []).map((restroom) => {
+        const override = getOverride(restroom);
+        const restroomStatus = override && override.restroomStatus;
+        return Object.assign({}, restroom, {
+          restroomStatus: restroomStatus || '',
+          statusLabel: RESTROOM_STATUS_LABELS[restroomStatus] || '',
+          statusReason: (override && override.reason) || '',
+          hasOperationalIssue: Boolean(restroomStatus),
+        });
+      });
+      const primaryRestroom = restrooms.find((restroom) => !restroom.hasOperationalIssue)
+        || restrooms[0]
+        || null;
       return Object.assign({}, station, {
         restrooms,
-        primaryRestroom: restrooms[0] || null,
+        primaryRestroom,
         restroomCount: restrooms.length,
         isActive: index === currentIndex,
+        isBeforeFocus: index === currentIndex - 1,
+        isAfterFocus: index === currentIndex + 1,
+        showReverse: index === currentIndex && Boolean(station.isReverse),
         isOrigin: station.id === this._state.originStationId,
         isSystemOrigin: !this.data.isManualAnchor && station.id === this._systemOriginStationId,
-        dotStyle: `border-color: ${lineColor}; background-color: ${!this.data.isManualAnchor && station.id === this._systemOriginStationId ? lineColor : '#f6f7f8'};`,
+        dotStyle: `border-color: ${lineColor};`,
       });
     });
+  },
+
+  _startOperationalStatusClock() {
+    this._stopOperationalStatusClock();
+    this._operationalStatusTimer = setInterval(() => {
+      if (!this._rawStations) return;
+      const stations = this._decorateStations(
+        this._rawStations,
+        this.data.currentIndex,
+        this.data.lineColor,
+      );
+      const patch = { stations };
+      if (this.data.showRestroomDrawer && this.data.drawerStation) {
+        const drawerStation = stations.find(
+          (station) => station.id === this.data.drawerStation.id,
+        );
+        if (drawerStation) {
+          const drawerGroups = this._buildDrawerGroups(drawerStation.restrooms);
+          patch.drawerStation = drawerStation;
+          patch.drawerGroups = drawerGroups;
+          patch.drawerRestrooms = drawerGroups.reduce(
+            (result, group) => result.concat(group.restrooms),
+            [],
+          );
+        }
+      }
+      this.setData(patch);
+    }, OPERATIONAL_STATUS_REFRESH_MS);
+  },
+
+  _stopOperationalStatusClock() {
+    if (!this._operationalStatusTimer) return;
+    clearInterval(this._operationalStatusTimer);
+    this._operationalStatusTimer = null;
   },
 
   _visibleStationId() {
     const station = this._rawStations && this._rawStations[this.data.currentIndex];
     return station && station.id;
+  },
+
+  _currentSyncLineIds() {
+    const station = this._rawStations && this._rawStations[this.data.currentIndex];
+    const lineIds = (station && station.syncLineIds && station.syncLineIds.length)
+      ? station.syncLineIds.slice()
+      : [this._state.lineId];
+    const unique = lineIds.filter((lineId, index, all) => lineId && all.indexOf(lineId) === index);
+    const app = getApp();
+    app.globalData.activeSyncLineIds = unique.slice();
+    return unique;
+  },
+
+  _updateSyncStatus() {
+    if (!this._state || !this._rawStations) return;
+    const status = getSyncStatus(this._currentSyncLineIds(), {
+      cityId: SYNC_CITY_ID,
+      bundleSchema: SYNC_BUNDLE_SCHEMA,
+    });
+    this.setData({
+      syncPhase: status.phase,
+      syncTone: status.tone,
+      syncMessage: status.message,
+    });
+  },
+
+  _scheduleSyncForVisibleStation(delayMs) {
+    if (this._syncTimer) clearTimeout(this._syncTimer);
+    this._syncTimer = setTimeout(() => {
+      this._syncTimer = null;
+      const app = getApp();
+      if (!app.globalData.cloudReady) return;
+      const lineIds = this._currentSyncLineIds();
+      syncLines(lineIds, {
+        mode: 'auto',
+        cityId: SYNC_CITY_ID,
+        bundleSchema: SYNC_BUNDLE_SCHEMA,
+      }).then(() => this._updateSyncStatus());
+    }, Math.max(0, Number(delayMs) || 0));
+  },
+
+  onRefreshSync() {
+    if (this.data.syncPhase === 'checking') return;
+    const app = getApp();
+    if (!app.globalData.cloudReady) {
+      wx.showToast({ title: '当前无法连接云端', icon: 'none' });
+      return;
+    }
+    syncLines(this._currentSyncLineIds(), {
+      mode: 'manual',
+      cityId: SYNC_CITY_ID,
+      bundleSchema: SYNC_BUNDLE_SCHEMA,
+    }).then((result) => {
+      this._updateSyncStatus();
+      if (result.success && !result.skipped) {
+        wx.showToast({ title: '检查完成', icon: 'none' });
+        return;
+      }
+      if (result.retryAt) {
+        wx.showToast({ title: `下次可检查 ${formatDateTime(result.retryAt)}`, icon: 'none' });
+        return;
+      }
+      if (!result.success) wx.showToast({ title: '检查失败，请稍后重试', icon: 'none' });
+    });
   },
 
   _saveCurrentPreferences(patch) {
@@ -270,38 +517,129 @@ Page({
     if (this._feedback) this._feedback.play();
   },
 
-  onStationChange(event) {
-    const currentIndex = event.detail.current;
-    this.setData({
-      currentIndex,
-      stations: this._decorateStations(this._rawStations, currentIndex, this.data.lineColor),
-    });
+  _getReadableLineColor(color) {
+    return getReadableLineColor(color);
+  },
+
+  onStationAnimationFinish(payload) {
+    const detail = payload && payload.detail ? payload.detail : (payload || {});
+    const rawIndex = detail.currentIndex !== undefined ? detail.currentIndex : detail.current;
+    const parsedIndex = Number(rawIndex);
+    const currentIndex = Math.min(
+      Math.max(Number.isFinite(parsedIndex) ? parsedIndex : this.data.currentIndex, 0),
+      Math.max((this._rawStations || []).length - 1, 0),
+    );
+    const changed = currentIndex !== this.data.currentIndex;
+    const patch = {
+      motionCommitVersion: (this.data.motionCommitVersion || 0) + 1,
+    };
+    if (changed) {
+      patch.currentIndex = currentIndex;
+      patch.stations = this._decorateStations(this._rawStations, currentIndex, this.data.lineColor);
+    }
+    this.setData(patch);
+    if (!changed) return;
     this._playStationFeedback(currentIndex);
+    this._updateSyncStatus();
+    this._scheduleSyncForVisibleStation(320);
+  },
+
+  onWheelHorizontalSwipe(payload) {
+    const deltaX = Number(payload && payload.deltaX) || 0;
+    const deltaY = Number(payload && payload.deltaY) || 0;
+    if (Math.abs(deltaX) < TRANSFER_SWIPE_PX
+      || Math.abs(deltaX) <= Math.abs(deltaY) * HORIZONTAL_GESTURE_RATIO) return;
+
+    const station = (this._rawStations || []).find(
+      (item) => item.id === ((payload && payload.stationId) || this._visibleStationId()),
+    );
+    const transfers = station && station.transfers || [];
+    if (!transfers.length) return;
+
+    const transfer = this._getAdjacentTransfer(transfers, deltaX < 0 ? 1 : -1);
+    if (transfer) this._switchToTransfer(transfer);
   },
 
   onWheelTouchStart(event) {
     const touch = event.touches && event.touches[0];
-    this._wheelTouchStart = touch
-      ? { x: touch.clientX, y: touch.clientY }
+    this._wheelTouchGesture = touch
+      ? {
+        startX: touch.clientX,
+        startY: touch.clientY,
+        lastX: touch.clientX,
+        lastY: touch.clientY,
+        axis: 'pending',
+        sourceStationId: this._visibleStationId(),
+      }
       : null;
   },
 
+  onWheelTouchMove(event) {
+    const touch = event.touches && event.touches[0];
+    const gesture = this._wheelTouchGesture;
+    if (!touch || !gesture) return;
+    gesture.lastX = touch.clientX;
+    gesture.lastY = touch.clientY;
+    if (gesture.axis !== 'pending') return;
+    const deltaX = touch.clientX - gesture.startX;
+    const deltaY = touch.clientY - gesture.startY;
+    if (Math.max(Math.abs(deltaX), Math.abs(deltaY)) < GESTURE_DECISION_PX) return;
+    if (Math.abs(deltaX) > Math.abs(deltaY) * HORIZONTAL_GESTURE_RATIO) {
+      gesture.axis = 'horizontal';
+    } else if (Math.abs(deltaY) > Math.abs(deltaX) * HORIZONTAL_GESTURE_RATIO) {
+      gesture.axis = 'vertical';
+    }
+  },
+
   onWheelTouchEnd(event) {
-    const touch = event.changedTouches && event.changedTouches[0];
-    const start = this._wheelTouchStart;
-    this._wheelTouchStart = null;
-    if (!touch || !start) return;
+    this._finishWheelTouch(event);
+  },
 
-    const deltaX = touch.clientX - start.x;
-    const deltaY = touch.clientY - start.y;
-    if (Math.abs(deltaX) < 48 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.2) return;
+  onWheelTouchCancel(event) {
+    this._finishWheelTouch(event);
+  },
 
-    const station = this._rawStations && this._rawStations[this.data.currentIndex];
-    const transfers = station && station.transfers || [];
-    if (!transfers.length) return;
+  _finishWheelTouch(event) {
+    const gesture = this._wheelTouchGesture;
+    const touch = event && event.changedTouches && event.changedTouches[0];
+    this._wheelTouchGesture = null;
+    if (!gesture) return;
+    const endX = touch ? touch.clientX : gesture.lastX;
+    const endY = touch ? touch.clientY : gesture.lastY;
+    this.onWheelHorizontalSwipe({
+      deltaX: endX - gesture.startX,
+      deltaY: endY - gesture.startY,
+      stationId: gesture.sourceStationId,
+    });
+  },
 
-    const transferIndex = deltaX < 0 ? 0 : transfers.length - 1;
-    this._switchToTransfer(transfers[transferIndex]);
+  _getAdjacentTransfer(transfers, step) {
+    const currentLineId = this._state && this._state.lineId;
+    const transferList = (transfers || []).filter(
+      (transfer, index, all) => transfer && transfer.lineId
+        && transfer.lineId !== currentLineId
+        && all.findIndex((item) => item.lineId === transfer.lineId) === index,
+    );
+    if (!currentLineId || !transferList.length) return null;
+
+    const lineIds = [currentLineId].concat(transferList.map((transfer) => transfer.lineId))
+      .sort((left, right) => String(left).localeCompare(String(right), 'zh-CN', { numeric: true }));
+    const currentIndex = lineIds.indexOf(currentLineId);
+    const offset = step < 0 ? -1 : 1;
+    const targetLineId = lineIds[(currentIndex + offset + lineIds.length) % lineIds.length];
+    return transferList.find((transfer) => transfer.lineId === targetLineId) || null;
+  },
+
+  onSelectTransferLine(event) {
+    const dataset = (event.currentTarget && event.currentTarget.dataset) || {};
+    const station = (this._rawStations || []).find((item) => item.id === this._visibleStationId());
+    if (!station) return;
+    const targetStationId = dataset.transferStationId || dataset.stationId;
+    const transfer = (station.transfers || []).find((item) => (
+      item.lineId === dataset.lineId
+      && (!targetStationId || item.stationId === targetStationId)
+    ));
+    if (transfer) this._switchToTransfer(transfer);
   },
 
   _switchToTransfer(transfer) {
@@ -311,7 +649,7 @@ Page({
     this._cancelPendingLocation();
     this._state.lineId = option.id;
     this._state.direction = option.defaultDirection
-      || (option.directions[0] && option.directions[0].id)
+      || (option.directions && option.directions[0] && option.directions[0].id)
       || 'forward';
     this._state.routeId = option.type === 'branched' ? '' : option.defaultRouteId;
     this._refreshHomeView(transfer.stationId);
@@ -365,18 +703,21 @@ Page({
   },
 
   onSetManualAnchor(event) {
-    const originStationId = event.currentTarget.dataset.stationId;
+    const dataset = (event.currentTarget && event.currentTarget.dataset) || {};
+    const originStationId = dataset.stationId;
+    const originStation = (this._rawStations || []).find(
+      (station) => station.id === originStationId,
+    );
+    if (!originStation) return;
+
     const visibleStationId = this._visibleStationId();
     this._cancelPendingLocation();
     this._state.originStationId = originStationId;
     this.setData({ isManualAnchor: true });
     this._refreshHomeView(visibleStationId || originStationId);
     this._saveCurrentPreferences({ originMode: 'manual' });
-    this._addRecentRecord(
-      (this._rawStations || []).find((station) => station.id === originStationId),
-      '设置起点',
-    );
-    wx.showToast({ title: `已从 ${this.data.originStationName} 开始计算`, icon: 'none' });
+    this._addRecentRecord(originStation, '设置起点');
+    wx.showToast({ title: `已从 ${originStation.name} 开始计算`, icon: 'none' });
   },
 
   onRestoreSmartLocation() {
@@ -545,15 +886,49 @@ Page({
 
   onOpenRestroomDrawer(event) {
     const stationId = event.currentTarget.dataset.stationId;
-    const station = (this._rawStations || []).find((item) => item.id === stationId);
+    const station = (this.data.stations || []).find((item) => item.id === stationId);
     if (!station || !(station.restrooms || []).length) return;
+    const drawerGroups = this._buildDrawerGroups(station.restrooms);
 
     this.setData({
       showRestroomDrawer: true,
       drawerStation: station,
-      drawerRestrooms: station.restrooms,
+      drawerGroups,
+      drawerRestrooms: drawerGroups.reduce(
+        (result, group) => result.concat(group.restrooms),
+        [],
+      ),
     });
     this._addRecentRecord(station, '查看厕所');
+  },
+
+  _buildDrawerGroups(restrooms) {
+    const lineOptions = this.data.lineOptions || [];
+    const groupsByLine = Object.create(null);
+    (restrooms || []).forEach((restroom) => {
+      const lineId = String(restroom.lineId || '');
+      if (!lineId) return;
+      const lineOption = lineOptions.find((item) => item.id === lineId) || {};
+      if (!groupsByLine[lineId]) {
+        const lineColor = lineOption.color || '#1677ff';
+        groupsByLine[lineId] = {
+          lineId,
+          lineName: lineOption.name || restroom.lineName || `${lineId}号线`,
+          lineColor,
+          lineTextColor: lineOption.textColor || getReadableLineColor(lineColor),
+          isCurrent: lineId === this._state.lineId,
+          restrooms: [],
+        };
+      }
+      groupsByLine[lineId].restrooms.push(Object.assign({}, restroom, {
+        lineId,
+        lineName: restroom.lineName || groupsByLine[lineId].lineName,
+      }));
+    });
+    return Object.keys(groupsByLine).map((lineId) => groupsByLine[lineId]).sort((left, right) => {
+      if (left.isCurrent !== right.isCurrent) return left.isCurrent ? -1 : 1;
+      return left.lineId.localeCompare(right.lineId, 'zh-CN', { numeric: true });
+    });
   },
 
   onCloseRestroomDrawer() {
@@ -570,11 +945,12 @@ Page({
       || station.primaryRestroom
       || (station.restrooms || [])[0];
     if (!restroom) return;
+    if (!restroom.lineId) return;
 
     const app = getApp();
     app.globalData.pendingCorrectionContext = {
-      lineId: restroom.lineId || this._state.lineId,
-      stationId: String(restroom.id || '').replace(/-restroom$/, ''),
+      lineId: String(restroom.lineId),
+      stationId: String(restroom.stationId || ''),
       restroomId: restroom.id,
     };
     this.setData({ showRestroomDrawer: false });

@@ -36,19 +36,239 @@ function createDatabaseMock() {
 
 async function validateCloudFunction() {
   const db = createDatabaseMock();
+  let databaseOptions = null;
   const sdkPath = require.resolve('wx-server-sdk', {
     paths: [path.join(root, 'cloudfunctions/metroRestroomApi')],
   });
   const cloudMock = {
     DYNAMIC_CURRENT_ENV: 'dynamic',
     init() {},
-    database() { return db; },
+    database(options) {
+      databaseOptions = options;
+      return db;
+    },
     getWXContext() { return { OPENID: 'private-openid-for-tests' }; },
   };
   require.cache[sdkPath] = { id: sdkPath, filename: sdkPath, loaded: true, exports: cloudMock };
   const apiPath = path.join(root, 'cloudfunctions/metroRestroomApi/index');
   delete require.cache[require.resolve(apiPath)];
   const api = require(apiPath);
+  assert.deepStrictEqual(databaseOptions, { throwOnNotFound: false });
+
+  const syncRequest = (lines, extra) => api.main({
+    action: 'syncRestroomStatus',
+    payload: Object.assign({
+      schemaVersion: 1,
+      cityId: 'shanghai',
+      lines,
+    }, extra || {}),
+  });
+  const missingManifest = await syncRequest([{ lineId: '2', version: '' }]);
+  assert.strictEqual(missingManifest.success, false);
+  assert.strictEqual(missingManifest.code, 'DATA_NOT_READY');
+  assert.strictEqual(missingManifest.retryAfterSeconds, 900);
+
+  const invalidSyncRequests = [
+    api.main({ action: 'syncRestroomStatus', payload: {} }),
+    syncRequest([], {}),
+    syncRequest([{ lineId: '99', version: '' }]),
+    syncRequest([{ lineId: '2', version: '' }, { lineId: '2', version: '' }]),
+    syncRequest([{ lineId: '2', version: 'unsafe/version' }]),
+    syncRequest([{ lineId: '2', version: 2 }]),
+    syncRequest(Array.from({ length: 21 }, () => ({ lineId: '2', version: '' }))),
+    syncRequest([{ lineId: '2', version: '' }], { cityId: 'beijing' }),
+  ];
+  const invalidSyncResults = await Promise.all(invalidSyncRequests);
+  invalidSyncResults.forEach((result) => {
+    assert.strictEqual(result.success, false);
+    assert.strictEqual(result.code, 'INVALID_ARGUMENT');
+  });
+
+  db.stores.data_versions.set('sync_manifest_shanghai', {
+    schemaVersion: 1,
+    cityId: 'shanghai',
+    ttlSeconds: 3600,
+    lineVersions: { '2': 'status_v2' },
+  });
+  const invalidManifestTtl = await syncRequest([{ lineId: '2', version: 'status_v2' }]);
+  assert.strictEqual(invalidManifestTtl.success, false);
+  assert.strictEqual(invalidManifestTtl.code, 'DATA_NOT_READY');
+  assert.strictEqual(invalidManifestTtl.retryAfterSeconds, 900);
+
+  db.stores.data_versions.set('sync_manifest_shanghai', {
+    _id: 'sync_manifest_shanghai',
+    schemaVersion: 1,
+    cityId: 'shanghai',
+    ttlSeconds: 43200,
+    lineVersions: { '2': 'status_v2', '8': 'status_v8' },
+    privateNote: '不得返回客户端',
+  });
+  db.stores.data_versions.set('sync_line_shanghai_2_status_v2', {
+    _id: 'sync_line_shanghai_2_status_v2',
+    schemaVersion: 1,
+    cityId: 'shanghai',
+    lineId: '2',
+    version: 'status_v2',
+    overrides: [
+      {
+        restroomId: 'l2-s001-restroom',
+        restroomStatus: 'maintenance',
+        reason: ' 临时维修 ',
+        effectiveFromMs: 1787000000000,
+        expiresAtMs: 1787086400000,
+        operator: '不得返回客户端',
+      },
+      {
+        restroomId: 'l2-s002-restroom',
+        restroomStatus: 'closed',
+        expiresAtMs: 1000,
+      },
+    ],
+    privateNote: '不得返回客户端',
+  });
+  db.stores.data_versions.set('sync_line_shanghai_8_status_v8', {
+    _id: 'sync_line_shanghai_8_status_v8',
+    schemaVersion: 1,
+    cityId: 'shanghai',
+    lineId: '8',
+    version: 'status_v8',
+    overrides: [],
+  });
+
+  const syncStartedAt = Date.now();
+  const mixedSync = await syncRequest([
+    { lineId: '2', version: 'status_v2' },
+    { lineId: '8', version: 'status_v7' },
+  ]);
+  assert.strictEqual(mixedSync.success, true);
+  assert.strictEqual(mixedSync.data.schemaVersion, 1);
+  assert.strictEqual(mixedSync.data.cityId, 'shanghai');
+  assert.strictEqual(mixedSync.data.ttlSeconds, 43200);
+  assert.ok(mixedSync.data.checkedAtMs >= syncStartedAt);
+  assert.deepStrictEqual(mixedSync.data.unchangedLineIds, ['2']);
+  assert.deepStrictEqual(mixedSync.data.changedLines, [{
+    lineId: '8',
+    version: 'status_v8',
+    overrides: [],
+  }]);
+
+  const changedSync = await syncRequest([{ lineId: '2', version: '' }]);
+  assert.strictEqual(changedSync.success, true);
+  assert.deepStrictEqual(changedSync.data.unchangedLineIds, []);
+  assert.deepStrictEqual(changedSync.data.changedLines[0], {
+    lineId: '2',
+    version: 'status_v2',
+    overrides: [
+      {
+        restroomId: 'l2-s001-restroom',
+        restroomStatus: 'maintenance',
+        reason: '临时维修',
+        effectiveFromMs: 1787000000000,
+        expiresAtMs: 1787086400000,
+      },
+      {
+        restroomId: 'l2-s002-restroom',
+        restroomStatus: 'closed',
+        expiresAtMs: 1000,
+      },
+    ],
+  });
+  assert.strictEqual(JSON.stringify(changedSync).includes('privateNote'), false);
+  assert.strictEqual(JSON.stringify(changedSync).includes('operator'), false);
+  assert.strictEqual(JSON.stringify(changedSync).includes('private-openid-for-tests'), false);
+
+  db.stores.data_versions.set('sync_manifest_shanghai', {
+    schemaVersion: 1,
+    cityId: 'shanghai',
+    lineVersions: { '2': 'missing_snapshot', '8': 'status_v8' },
+  });
+  const incompleteBatch = await syncRequest([
+    { lineId: '2', version: '' },
+    { lineId: '8', version: 'status_v8' },
+  ]);
+  assert.strictEqual(incompleteBatch.success, false);
+  assert.strictEqual(incompleteBatch.code, 'DATA_NOT_READY');
+  assert.strictEqual(incompleteBatch.data, undefined);
+
+  db.stores.data_versions.set('sync_manifest_shanghai', {
+    schemaVersion: 1,
+    cityId: 'shanghai',
+    lineVersions: { '2': 'invalid_snapshot' },
+  });
+  db.stores.data_versions.set('sync_line_shanghai_2_invalid_snapshot', {
+    schemaVersion: 1,
+    cityId: 'shanghai',
+    lineId: '2',
+    version: 'wrong_version',
+    overrides: [],
+  });
+  const mismatchedSnapshot = await syncRequest([{ lineId: '2', version: '' }]);
+  assert.strictEqual(mismatchedSnapshot.code, 'DATA_NOT_READY');
+
+  db.stores.data_versions.set('sync_line_shanghai_2_invalid_snapshot', {
+    schemaVersion: 1,
+    cityId: 'shanghai',
+    lineId: '2',
+    version: 'invalid_snapshot',
+    overrides: [
+      { restroomId: 'l2-s001-restroom', restroomStatus: 'maintenance' },
+      { restroomId: 'l2-s001-restroom', restroomStatus: 'closed' },
+    ],
+  });
+  const duplicateOverride = await syncRequest([{ lineId: '2', version: '' }]);
+  assert.strictEqual(duplicateOverride.code, 'DATA_NOT_READY');
+
+  db.stores.data_versions.set('sync_line_shanghai_2_invalid_snapshot', {
+    schemaVersion: 1,
+    cityId: 'shanghai',
+    lineId: '2',
+    version: 'invalid_snapshot',
+    overrides: [{ restroomId: 'l2-s001-restroom', restroomStatus: 'available' }],
+  });
+  const invalidStatus = await syncRequest([{ lineId: '2', version: '' }]);
+  assert.strictEqual(invalidStatus.code, 'DATA_NOT_READY');
+
+  db.stores.data_versions.set('sync_line_shanghai_2_invalid_snapshot', {
+    schemaVersion: 1,
+    cityId: 'shanghai',
+    lineId: '2',
+    version: 'invalid_snapshot',
+    overrides: [{
+      restroomId: 'l2-s001-restroom',
+      restroomStatus: 'maintenance',
+      reason: '维'.repeat(121),
+    }],
+  });
+  const invalidReason = await syncRequest([{ lineId: '2', version: '' }]);
+  assert.strictEqual(invalidReason.code, 'DATA_NOT_READY');
+
+  db.stores.data_versions.set('sync_line_shanghai_2_invalid_snapshot', {
+    schemaVersion: 1,
+    cityId: 'shanghai',
+    lineId: '2',
+    version: 'invalid_snapshot',
+    overrides: [{
+      restroomId: 'l2-s001-restroom',
+      restroomStatus: 'maintenance',
+      effectiveFromMs: 2000,
+      expiresAtMs: 1000,
+    }],
+  });
+  const invalidTimeRange = await syncRequest([{ lineId: '2', version: '' }]);
+  assert.strictEqual(invalidTimeRange.code, 'DATA_NOT_READY');
+
+  db.stores.data_versions.set('sync_line_shanghai_2_invalid_snapshot', {
+    schemaVersion: 1,
+    cityId: 'shanghai',
+    lineId: '2',
+    version: 'invalid_snapshot',
+    overrides: Array.from({ length: 129 }, (_, index) => ({
+      restroomId: `l2-s${index}-restroom`,
+      restroomStatus: 'unknown',
+    })),
+  });
+  const tooManyOverrides = await syncRequest([{ lineId: '2', version: '' }]);
+  assert.strictEqual(tooManyOverrides.code, 'DATA_NOT_READY');
 
   const payload = {
     requestId: 'correction-1',
@@ -165,7 +385,7 @@ async function main() {
 
   await validateClientService();
   await validateCloudFunction();
-  console.log('云开发验收通过：19 条线路、518 个纠错上下文、匿名幂等、限流、错误降级和本地草稿。');
+  console.log('云开发验收通过：19 条线路、518 个纠错上下文、按线路状态同步、匿名幂等、限流、错误降级和本地草稿。');
 }
 
 main().catch((error) => {

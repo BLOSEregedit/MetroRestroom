@@ -88,6 +88,10 @@ function routeLabel(route) {
   return names.length > 1 ? `${names[0]}—${names[names.length - 1]}` : route.id;
 }
 
+function compareLineIds(left, right) {
+  return String(left).localeCompare(String(right), 'zh-CN', { numeric: true });
+}
+
 function getLineOptions() {
   return Object.keys(LINES).map((lineId) => {
     const line = LINES[lineId];
@@ -154,11 +158,26 @@ Object.keys(transferTargetsById).forEach((fromId) => {
 
 function shortestMetrics(originId, targetId) {
   if (!recordById[originId] || !recordById[targetId]) {
-    return { segmentCount: 0, transferCount: 0 };
+    return {
+      stationIds: [],
+      lineIds: [],
+      transferStationIds: [],
+      segmentCount: 0,
+      transferCount: 0,
+    };
   }
-  if (originId === targetId) return { segmentCount: 0, transferCount: 0 };
+  if (originId === targetId) {
+    return {
+      stationIds: [originId],
+      lineIds: [recordById[originId].lineId],
+      transferStationIds: [],
+      segmentCount: 0,
+      transferCount: 0,
+    };
+  }
 
   const distances = Object.create(null);
+  const previous = Object.create(null);
   const queue = [{ id: originId, cost: 0, segmentCount: 0, transferCount: 0 }];
   distances[originId] = 0;
 
@@ -166,13 +185,42 @@ function shortestMetrics(originId, targetId) {
     queue.sort((left, right) => left.cost - right.cost);
     const current = queue.shift();
     if (current.cost !== distances[current.id]) continue;
-    if (current.id === targetId) return current;
+    if (current.id === targetId) {
+      const stationIds = [];
+      const transferStationIds = [];
+      let cursorId = targetId;
+      while (cursorId) {
+        stationIds.push(cursorId);
+        const step = previous[cursorId];
+        if (step && step.kind === 'transfer') {
+          transferStationIds.push(cursorId, step.from);
+        }
+        cursorId = step && step.from;
+      }
+      stationIds.reverse();
+      transferStationIds.reverse();
+      const lineIds = stationIds.reduce((result, stationId) => {
+        const record = recordById[stationId];
+        if (record && !result.includes(record.lineId)) result.push(record.lineId);
+        return result;
+      }, []);
+      return {
+        stationIds,
+        lineIds,
+        transferStationIds: transferStationIds.filter(
+          (stationId, index, all) => all.indexOf(stationId) === index,
+        ),
+        segmentCount: current.segmentCount,
+        transferCount: current.transferCount,
+      };
+    }
 
     (graph[current.id] || []).forEach((edge) => {
       const isTransfer = edge.kind === 'transfer';
       const cost = current.cost + (isTransfer ? 6 : 3);
       if (distances[edge.to] !== undefined && distances[edge.to] <= cost) return;
       distances[edge.to] = cost;
+      previous[edge.to] = { from: current.id, kind: edge.kind };
       queue.push({
         id: edge.to,
         cost,
@@ -182,7 +230,13 @@ function shortestMetrics(originId, targetId) {
     });
   }
 
-  return { segmentCount: 0, transferCount: 0 };
+  return {
+    stationIds: [],
+    lineIds: [],
+    transferStationIds: [],
+    segmentCount: 0,
+    transferCount: 0,
+  };
 }
 
 function normalizeAccess(accessRaw) {
@@ -215,6 +269,7 @@ function buildRestroom(record, originStationId, isReverse) {
   });
   return {
     id: `${record.lineStationId}-restroom`,
+    stationId: record.lineStationId,
     lineId: record.lineId,
     lineName: record.lineName,
     location: record.locationRaw || '',
@@ -383,6 +438,11 @@ function buildHomeView(input) {
       originStationId,
       Boolean(directMetrics && directMetrics.isReverse),
     ));
+    const path = shortestMetrics(originStationId, station.id);
+    const syncLineIds = path.lineIds.slice();
+    restrooms.forEach((restroom) => {
+      if (!syncLineIds.includes(restroom.lineId)) syncLineIds.push(restroom.lineId);
+    });
     return {
       id: station.id,
       name: station.name,
@@ -390,10 +450,18 @@ function buildHomeView(input) {
       status: station.status,
       etaLabel: restrooms.length ? restrooms[0].etaLabel : '',
       restrooms,
-      transfers: (transferTargetsById[station.id] || []).map((targetId) => ({
-        lineId: recordById[targetId].lineId,
-        stationId: targetId,
-      })),
+      path,
+      syncLineIds,
+      transfers: (transferTargetsById[station.id] || []).map((targetId) => {
+        const targetRecord = recordById[targetId];
+        const targetLine = targetRecord && LINES[targetRecord.lineId];
+        return {
+          lineId: targetRecord.lineId,
+          lineName: targetLine.name,
+          lineColor: targetLine.color,
+          stationId: targetId,
+        };
+      }).sort((left, right) => compareLineIds(left.lineId, right.lineId)),
       isReverse: Boolean(directMetrics && directMetrics.isReverse),
       hasRestroom: restrooms.length > 0,
       isOrigin: station.id === originStationId,
@@ -466,4 +534,5 @@ module.exports = {
   buildHomeView,
   getStationContext,
   getLocationCandidateOptions,
+  getPathMetadata: shortestMetrics,
 };

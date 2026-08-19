@@ -1,0 +1,162 @@
+var VISIBLE_SLOT_COUNT = 5;
+var FOCUS_SCALE_X = 0.065;
+var FOCUS_SCALE_Y = 0.055;
+var FOCUS_PUSH_RPX = 14;
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function round(value, digits) {
+  var factor = Math.pow(10, digits || 0);
+  return Math.round(value * factor) / factor;
+}
+
+function smoothstep(value) {
+  var progress = clamp(value, 0, 1);
+  return progress * progress * (3 - (2 * progress));
+}
+
+function getFocusStrength(distance) {
+  var offset = Math.abs(distance || 0);
+  if (offset >= 1) return 0;
+  return (1 + Math.cos(Math.PI * offset)) / 2;
+}
+
+function getCardMotion(distance) {
+  var offset = distance || 0;
+  var absoluteOffset = Math.abs(offset);
+  var focus = getFocusStrength(offset);
+  var pushProgress = smoothstep(clamp(1 - Math.abs(absoluteOffset - 1), 0, 1));
+  return {
+    focus: round(focus, 6),
+    scaleX: round(1 + (FOCUS_SCALE_X * focus), 6),
+    scaleY: round(1 + (FOCUS_SCALE_Y * focus), 6),
+    translateY: round((offset < 0 ? -1 : (offset > 0 ? 1 : 0)) * FOCUS_PUSH_RPX * pushProgress, 6),
+  };
+}
+
+function getMotionState(instance) {
+  var state = instance.getState();
+  if (typeof state.settledIndex !== 'number') state.settledIndex = 0;
+  if (!state.styledIndices) state.styledIndices = {};
+  return state;
+}
+
+function getCards(ownerInstance, state) {
+  if (!state.cards) {
+    state.cards = ownerInstance.selectAllComponents('.station-motion-card') || [];
+  }
+  return state.cards;
+}
+
+function clearCardStyle(card) {
+  card.setStyle({
+    transform: '',
+    'transform-origin': '',
+    'z-index': '',
+  });
+}
+
+function clearMotionStyles(ownerInstance, instance, state) {
+  var motionState = state || getMotionState(instance);
+  var cards = getCards(ownerInstance, motionState);
+  for (var index = 0; index < cards.length; index += 1) {
+    clearCardStyle(cards[index]);
+  }
+  motionState.cards = null;
+  motionState.styledIndices = {};
+}
+
+function applyMotionPosition(ownerInstance, instance, state, position) {
+  var cards = getCards(ownerInstance, state);
+  var previousIndices = state.styledIndices || {};
+  var nextIndices = {};
+  for (var cardIndex = 0; cardIndex < cards.length; cardIndex += 1) {
+    var card = cards[cardIndex];
+    var dataset = card.getDataset() || {};
+    var stationIndex = dataset.motionIndex;
+    if (stationIndex === undefined || stationIndex === null) continue;
+    stationIndex = +stationIndex;
+    var distance = stationIndex - position;
+    if (Math.abs(distance) < 2.001) {
+      var motion = getCardMotion(distance);
+      card.setStyle({
+        transform: 'translateY(' + motion.translateY + 'rpx) scale3d(' + motion.scaleX + ',' + motion.scaleY + ',1)',
+        'transform-origin': 'left center',
+        'z-index': motion.focus > 0 ? '3' : '2',
+      });
+      nextIndices[stationIndex] = true;
+    } else if (previousIndices[stationIndex]) {
+      clearCardStyle(card);
+    }
+  }
+  state.styledIndices = nextIndices;
+}
+
+function getSlotHeight(instance, state) {
+  if (state.slotHeight > 0) return state.slotHeight;
+  var rect = instance.getBoundingClientRect();
+  state.slotHeight = rect && rect.height ? rect.height / VISIBLE_SLOT_COUNT : 0;
+  return state.slotHeight;
+}
+
+function onTransition(event, ownerInstance) {
+  var instance = event.instance;
+  var state = getMotionState(instance);
+  var slotHeight = getSlotHeight(instance, state);
+  if (!slotHeight) return;
+  if (!state.motionActive) {
+    var dataset = instance.getDataset() || {};
+    var currentIndex = +dataset.currentIndex;
+    if (currentIndex === currentIndex) state.settledIndex = currentIndex;
+    state.motionActive = true;
+    state.anchorIndex = state.settledIndex;
+  }
+  state.latestPosition = state.anchorIndex - (((event.detail && event.detail.dy) || 0) / slotHeight);
+  if (state.framePending) return;
+  state.framePending = true;
+  instance.requestAnimationFrame(function () {
+    state.framePending = false;
+    if (!state.motionActive) return;
+    applyMotionPosition(ownerInstance, instance, state, state.latestPosition);
+  });
+}
+
+function onAnimationFinish(event, ownerInstance) {
+  var instance = event.instance;
+  var state = getMotionState(instance);
+  var detail = event.detail || {};
+  var currentIndex = detail.current;
+  if (currentIndex === undefined || currentIndex === null) currentIndex = state.settledIndex;
+  currentIndex = +currentIndex;
+  state.motionActive = false;
+  state.latestPosition = currentIndex;
+  applyMotionPosition(ownerInstance, instance, state, currentIndex);
+  ownerInstance.callMethod('onStationAnimationFinish', {
+    currentIndex: currentIndex,
+    source: detail.source || '',
+  });
+}
+
+function onSettledStateChange(newValue, oldValue, ownerInstance, instance) {
+  var swiper = ownerInstance.selectComponent('.station-swiper');
+  if (!swiper) return;
+  var state = getMotionState(swiper);
+  var dataset = swiper.getDataset() || {};
+  var currentIndex = +dataset.currentIndex;
+  state.settledIndex = currentIndex === currentIndex ? currentIndex : 0;
+  state.anchorIndex = state.settledIndex;
+  state.latestPosition = state.settledIndex;
+  state.motionActive = false;
+  state.slotHeight = 0;
+  clearMotionStyles(ownerInstance, swiper, state);
+}
+
+module.exports = {
+  getCardMotion: getCardMotion,
+  getFocusStrength: getFocusStrength,
+  onAnimationFinish: onAnimationFinish,
+  onSettledStateChange: onSettledStateChange,
+  onTransition: onTransition,
+};
