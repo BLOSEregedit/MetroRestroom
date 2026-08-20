@@ -18,13 +18,25 @@ const {
   subscribeSyncState,
   syncLines,
 } = require('../../utils/data-sync');
+const {
+  clamp,
+  clampWheelVelocity,
+  getCardMotion,
+  getDetentIndex,
+} = require('../../utils/wheel-physics');
+
+const workletApi = typeof wx !== 'undefined' && wx.worklet ? wx.worklet : null;
+const runOnJS = workletApi && workletApi.runOnJS;
+const scrollViewContext = workletApi && workletApi.scrollViewContext;
 
 const SYNC_CITY_ID = 'shanghai';
 const SYNC_BUNDLE_SCHEMA = 1;
 const OPERATIONAL_STATUS_REFRESH_MS = 60 * 1000;
-const GESTURE_DECISION_PX = 12;
 const TRANSFER_SWIPE_PX = 48;
 const HORIZONTAL_GESTURE_RATIO = 1.2;
+const WHEEL_VISIBLE_SLOTS = 5;
+const WHEEL_BOTTOM_SPACER_SLOTS = 3;
+const WHEEL_SNAP_DURATION_MS = 180;
 const RESTROOM_STATUS_LABELS = Object.freeze({
   maintenance: '维护中',
   closed: '暂不可用',
@@ -113,8 +125,12 @@ Page({
     originStationName: '',
     stations: [],
     currentIndex: 0,
-    motionCommitVersion: 0,
-    stationPreviousMargin: '120rpx',
+    navigationBarHeight: 64,
+    statusBarHeight: 20,
+    wheelSlotHeight: 64,
+    wheelTopSpacerHeight: 64,
+    wheelBottomSpacerHeight: 192,
+    wheelScrollTop: 0,
     isManualAnchor: false,
     soundEnabled: true,
     vibrationEnabled: true,
@@ -142,6 +158,7 @@ Page({
 
   onLoad() {
     const initialState = catalog.getInitialHomeState();
+    const navigationMetrics = this._getNavigationMetrics();
 
     this._state = {
       lineId: initialState.lineId,
@@ -157,7 +174,8 @@ Page({
       soundEnabled: initialState.soundEnabled,
       vibrationEnabled: initialState.vibrationEnabled,
     });
-    this._lastFeedbackIndex = null;
+    this._initializeWheelWorklet();
+    this._wheelFeedbackSequence = 0;
     this._unsubscribeSync = subscribeSyncState((event) => {
       if (!this._state || event.cityId !== SYNC_CITY_ID) return;
       this._updateSyncStatus();
@@ -170,6 +188,8 @@ Page({
     });
 
     this.setData({
+      navigationBarHeight: navigationMetrics.navigationBarHeight,
+      statusBarHeight: navigationMetrics.statusBarHeight,
       lineOptions: normalizeLineOptions(catalog.getLineOptions()),
       isManualAnchor: initialState.originMode === 'manual',
       soundEnabled: initialState.soundEnabled !== false,
@@ -213,6 +233,7 @@ Page({
 
   onHide() {
     this._stopOperationalStatusClock();
+    if (this._feedback) this._feedback.reset();
   },
 
   onResize() {
@@ -223,9 +244,106 @@ Page({
     this._locationRequestToken += 1;
     if (this._syncTimer) clearTimeout(this._syncTimer);
     if (this._stationLayoutTimer) clearTimeout(this._stationLayoutTimer);
+    this._clearStationAnimatedStyles();
     this._stopOperationalStatusClock();
     if (this._unsubscribeSync) this._unsubscribeSync();
     if (this._feedback) this._feedback.destroy();
+  },
+
+  _getNavigationMetrics() {
+    let statusBarHeight = 20;
+    try {
+      const windowInfo = wx.getWindowInfo
+        ? wx.getWindowInfo()
+        : (wx.getSystemInfoSync ? wx.getSystemInfoSync() : {});
+      statusBarHeight = Number(windowInfo.statusBarHeight) || statusBarHeight;
+      if (wx.getMenuButtonBoundingClientRect) {
+        const menu = wx.getMenuButtonBoundingClientRect();
+        const contentHeight = menu.height + (2 * Math.max(menu.top - statusBarHeight, 0));
+        return {
+          statusBarHeight,
+          navigationBarHeight: statusBarHeight + Math.max(contentHeight, 44),
+        };
+      }
+    } catch (error) {
+      // 无法读取胶囊尺寸时使用微信导航栏的通用高度。
+    }
+    return { statusBarHeight, navigationBarHeight: statusBarHeight + 44 };
+  },
+
+  _initializeWheelWorklet() {
+    if (!workletApi || typeof workletApi.shared !== 'function') return;
+    this._wheelPosition = workletApi.shared(0);
+    this._wheelSlotHeight = workletApi.shared(1);
+    this._wheelMaxIndex = workletApi.shared(0);
+    this._wheelDetentIndex = workletApi.shared(0);
+    this._wheelSuppressDetents = workletApi.shared(1);
+    this._wheelSnapping = workletApi.shared(0);
+    this._wheelSession = workletApi.shared(0);
+    this._wheelSequence = workletApi.shared(0);
+    this._wheelScrollRef = workletApi.shared();
+    this._wheelHorizontalX = workletApi.shared(0);
+    this._wheelHorizontalY = workletApi.shared(0);
+  },
+
+  _clearStationAnimatedStyles() {
+    if (typeof this.clearAnimatedStyle !== 'function') return;
+    const count = Number(this._boundStationStyleCount) || 0;
+    for (let index = 0; index < count; index += 1) {
+      try {
+        this.clearAnimatedStyle(`#station-card-${index}`);
+      } catch (error) {
+        // 节点已被线路切换移除时无需额外处理。
+      }
+    }
+    this._boundStationStyleCount = 0;
+  },
+
+  _bindStationAnimatedStyles(count) {
+    if (!this._wheelPosition || typeof this.applyAnimatedStyle !== 'function') return;
+    this._clearStationAnimatedStyles();
+    const position = this._wheelPosition;
+    const slotHeight = this._wheelSlotHeight;
+    const stationCount = Math.max(0, Number(count) || 0);
+
+    for (let index = 0; index < stationCount; index += 1) {
+      const stationIndex = index;
+      try {
+        this.applyAnimatedStyle(`#station-card-${stationIndex}`, () => {
+          'worklet';
+          const motion = getCardMotion(stationIndex - position.value, slotHeight.value);
+          return {
+            transform: `translateY(${motion.translateY}px) scale3d(${motion.scaleX},${motion.scaleY},1)`,
+            zIndex: 1 + Math.round(motion.focus * 10),
+          };
+        });
+      } catch (error) {
+        // 极短线路切换窗口中节点可能尚未挂载，下一次布局会重新绑定。
+      }
+    }
+    this._boundStationStyleCount = stationCount;
+
+    if (!this._wheelScrollRef || typeof this.createSelectorQuery !== 'function') return;
+    this.createSelectorQuery().select('.station-wheel-scroll').ref((result) => {
+      if (result && result.ref) this._wheelScrollRef.value = result.ref;
+    }).exec();
+  },
+
+  _resetWheelWorklet(currentIndex, maxIndex, slotHeight) {
+    if (!this._wheelPosition) return;
+    const nextSession = (Number(this._wheelSessionId) || 0) + 1;
+    this._wheelSessionId = nextSession;
+    this._wheelFeedbackSession = nextSession;
+    this._wheelFeedbackSequence = 0;
+    this._wheelPosition.value = currentIndex;
+    this._wheelSlotHeight.value = slotHeight;
+    this._wheelMaxIndex.value = maxIndex;
+    this._wheelDetentIndex.value = currentIndex;
+    this._wheelSuppressDetents.value = 1;
+    this._wheelSnapping.value = 0;
+    this._wheelSession.value = nextSession;
+    this._wheelSequence.value = 0;
+    if (this._feedback) this._feedback.reset();
   },
 
   _setLocationStatus(status, issue) {
@@ -315,26 +433,34 @@ Page({
       routeOptions,
       showRouteSelector: lineOption.type === 'branched' && routeOptions.length > 1,
       currentIndex,
-      motionCommitVersion: (this.data.motionCommitVersion || 0) + 1,
       stations: this._decorateStations(rawStations, currentIndex, lineColor),
+    }, () => {
+      this._scheduleStationWheelLayout();
     });
-    this._lastFeedbackIndex = currentIndex;
-    this._scheduleStationWheelLayout();
     this._updateSyncStatus();
     if (!(options && options.skipSync)) this._scheduleSyncForVisibleStation(0);
   },
 
   _scheduleStationWheelLayout() {
-    if (!wx.createSelectorQuery) return;
+    if (!wx.createSelectorQuery && typeof this.createSelectorQuery !== 'function') return;
     if (this._stationLayoutTimer) clearTimeout(this._stationLayoutTimer);
     this._stationLayoutTimer = setTimeout(() => {
       this._stationLayoutTimer = null;
-      wx.createSelectorQuery().select('.station-swiper').boundingClientRect((rect) => {
+      const query = typeof this.createSelectorQuery === 'function'
+        ? this.createSelectorQuery()
+        : wx.createSelectorQuery();
+      query.select('.station-wheel-scroll').boundingClientRect((rect) => {
         if (!rect || !rect.height) return;
-        const stationPreviousMargin = `${Math.round(rect.height / 5)}px`;
-        if (stationPreviousMargin !== this.data.stationPreviousMargin) {
-          this.setData({ stationPreviousMargin });
-        }
+        const slotHeight = rect.height / WHEEL_VISIBLE_SLOTS;
+        const maxIndex = Math.max((this._rawStations || []).length - 1, 0);
+        const currentIndex = clamp(this.data.currentIndex, 0, maxIndex);
+        this._resetWheelWorklet(currentIndex, maxIndex, slotHeight);
+        this.setData({
+          wheelSlotHeight: slotHeight,
+          wheelTopSpacerHeight: slotHeight,
+          wheelBottomSpacerHeight: slotHeight * WHEEL_BOTTOM_SPACER_SLOTS,
+          wheelScrollTop: currentIndex * slotHeight,
+        }, () => this._bindStationAnimatedStyles((this._rawStations || []).length));
       }).exec();
     }, 0);
   },
@@ -511,42 +637,157 @@ Page({
     });
   },
 
-  _playStationFeedback(index) {
-    if (index === this._lastFeedbackIndex) return;
-    this._lastFeedbackIndex = index;
-    if (this._feedback) this._feedback.play();
-  },
-
   _getReadableLineColor(color) {
     return getReadableLineColor(color);
   },
 
-  onStationAnimationFinish(payload) {
-    const detail = payload && payload.detail ? payload.detail : (payload || {});
-    const rawIndex = detail.currentIndex !== undefined ? detail.currentIndex : detail.current;
+  onWheelDragStart() {
+    if (!this._wheelSuppressDetents) return;
+    this._wheelSuppressDetents.value = 0;
+    this._wheelSnapping.value = 0;
+  },
+
+  _applyWheelPosition(position) {
+    'worklet';
+    const maximum = this._wheelMaxIndex.value;
+    const nextPosition = clamp(position, 0, maximum);
+    this._wheelPosition.value = nextPosition;
+    if (this._wheelSuppressDetents.value) return;
+
+    const currentDetent = this._wheelDetentIndex.value;
+    const nextDetent = getDetentIndex(currentDetent, nextPosition, maximum);
+    if (nextDetent === currentDetent) return;
+
+    const count = Math.abs(nextDetent - currentDetent);
+    const direction = nextDetent > currentDetent ? 1 : -1;
+    const sequence = this._wheelSequence.value + 1;
+    this._wheelDetentIndex.value = nextDetent;
+    this._wheelSequence.value = sequence;
+    runOnJS(this.onWheelDetents.bind(this))(
+      this._wheelSession.value,
+      sequence,
+      count,
+      direction,
+      nextDetent,
+    );
+  },
+
+  onWheelScrollStart(event) {
+    'worklet';
+    this._wheelSnapping.value = 0;
+    if (event && event.detail && event.detail.isDrag) this._wheelSuppressDetents.value = 0;
+  },
+
+  onWheelScrollUpdate(event) {
+    'worklet';
+    const slotHeight = Math.max(1, this._wheelSlotHeight.value);
+    this._applyWheelPosition(event.detail.scrollTop / slotHeight);
+  },
+
+  adjustWheelDecelerationVelocity(velocity) {
+    'worklet';
+    return clampWheelVelocity(velocity, this._wheelSlotHeight.value);
+  },
+
+  onWheelScrollEnd() {
+    'worklet';
+    if (this._wheelSuppressDetents.value) return;
+
+    const position = this._wheelPosition.value;
+    const targetIndex = clamp(
+      Math.round(position),
+      0,
+      this._wheelMaxIndex.value,
+    );
+    const session = this._wheelSession.value;
+    const finish = this.onWheelSettled.bind(this);
+
+    if (this._wheelSnapping.value || Math.abs(position - targetIndex) < 0.002) {
+      this._wheelSnapping.value = 0;
+      this._applyWheelPosition(targetIndex);
+      runOnJS(finish)(targetIndex, session);
+      return;
+    }
+
+    this._wheelSnapping.value = 1;
+    if (scrollViewContext && this._wheelScrollRef.value) {
+      scrollViewContext.scrollTo(this._wheelScrollRef.value, {
+        top: targetIndex * this._wheelSlotHeight.value,
+        duration: WHEEL_SNAP_DURATION_MS,
+        animated: true,
+        easingFunction: 'ease-out',
+      });
+      return;
+    }
+
+    this._applyWheelPosition(targetIndex);
+    runOnJS(this.onWheelSnapFallback.bind(this))(targetIndex, session);
+  },
+
+  onWheelSnapFallback(targetIndex, session) {
+    this.setData({
+      wheelScrollTop: targetIndex * this.data.wheelSlotHeight,
+    });
+    this.onWheelSettled(targetIndex, session);
+  },
+
+  onWheelDetents(session, sequence, count) {
+    if (Number(session) !== Number(this._wheelFeedbackSession)) return;
+    if (Number(sequence) <= Number(this._wheelFeedbackSequence)) return;
+    this._wheelFeedbackSequence = Number(sequence);
+    if (this._feedback) this._feedback.playDetents(count);
+  },
+
+  onWheelSettled(rawIndex, session) {
+    if (session !== undefined && Number(session) !== Number(this._wheelFeedbackSession)) return;
     const parsedIndex = Number(rawIndex);
     const currentIndex = Math.min(
       Math.max(Number.isFinite(parsedIndex) ? parsedIndex : this.data.currentIndex, 0),
       Math.max((this._rawStations || []).length - 1, 0),
     );
     const changed = currentIndex !== this.data.currentIndex;
-    const patch = {
-      motionCommitVersion: (this.data.motionCommitVersion || 0) + 1,
-    };
-    if (changed) {
-      patch.currentIndex = currentIndex;
-      patch.stations = this._decorateStations(this._rawStations, currentIndex, this.data.lineColor);
-    }
-    this.setData(patch);
     if (!changed) return;
-    this._playStationFeedback(currentIndex);
+    this.setData({
+      currentIndex,
+      stations: this._decorateStations(this._rawStations, currentIndex, this.data.lineColor),
+    });
     this._updateSyncStatus();
     this._scheduleSyncForVisibleStation(320);
   },
 
-  onWheelHorizontalSwipe(payload) {
-    const deltaX = Number(payload && payload.deltaX) || 0;
-    const deltaY = Number(payload && payload.deltaY) || 0;
+  onStationAnimationFinish(payload) {
+    const detail = payload && payload.detail ? payload.detail : (payload || {});
+    const rawIndex = detail.currentIndex !== undefined ? detail.currentIndex : detail.current;
+    this.onWheelSettled(rawIndex);
+  },
+
+  onWheelHorizontalGesture(event) {
+    'worklet';
+    if (event.state === 1) {
+      this._wheelHorizontalX.value = 0;
+      this._wheelHorizontalY.value = 0;
+      return;
+    }
+    if (event.state === 2) {
+      this._wheelHorizontalX.value += event.deltaX;
+      this._wheelHorizontalY.value += event.deltaY;
+      return;
+    }
+    if (event.state === 3) {
+      const finish = this.onWheelHorizontalSwipe.bind(this);
+      runOnJS(finish)(this._wheelHorizontalX.value, this._wheelHorizontalY.value);
+    }
+    this._wheelHorizontalX.value = 0;
+    this._wheelHorizontalY.value = 0;
+  },
+
+  onWheelHorizontalSwipe(payload, rawDeltaY) {
+    const deltaX = typeof payload === 'number'
+      ? payload
+      : (Number(payload && payload.deltaX) || 0);
+    const deltaY = typeof payload === 'number'
+      ? (Number(rawDeltaY) || 0)
+      : (Number(payload && payload.deltaY) || 0);
     if (Math.abs(deltaX) < TRANSFER_SWIPE_PX
       || Math.abs(deltaX) <= Math.abs(deltaY) * HORIZONTAL_GESTURE_RATIO) return;
 
@@ -558,59 +799,6 @@ Page({
 
     const transfer = this._getAdjacentTransfer(transfers, deltaX < 0 ? 1 : -1);
     if (transfer) this._switchToTransfer(transfer);
-  },
-
-  onWheelTouchStart(event) {
-    const touch = event.touches && event.touches[0];
-    this._wheelTouchGesture = touch
-      ? {
-        startX: touch.clientX,
-        startY: touch.clientY,
-        lastX: touch.clientX,
-        lastY: touch.clientY,
-        axis: 'pending',
-        sourceStationId: this._visibleStationId(),
-      }
-      : null;
-  },
-
-  onWheelTouchMove(event) {
-    const touch = event.touches && event.touches[0];
-    const gesture = this._wheelTouchGesture;
-    if (!touch || !gesture) return;
-    gesture.lastX = touch.clientX;
-    gesture.lastY = touch.clientY;
-    if (gesture.axis !== 'pending') return;
-    const deltaX = touch.clientX - gesture.startX;
-    const deltaY = touch.clientY - gesture.startY;
-    if (Math.max(Math.abs(deltaX), Math.abs(deltaY)) < GESTURE_DECISION_PX) return;
-    if (Math.abs(deltaX) > Math.abs(deltaY) * HORIZONTAL_GESTURE_RATIO) {
-      gesture.axis = 'horizontal';
-    } else if (Math.abs(deltaY) > Math.abs(deltaX) * HORIZONTAL_GESTURE_RATIO) {
-      gesture.axis = 'vertical';
-    }
-  },
-
-  onWheelTouchEnd(event) {
-    this._finishWheelTouch(event);
-  },
-
-  onWheelTouchCancel(event) {
-    this._finishWheelTouch(event);
-  },
-
-  _finishWheelTouch(event) {
-    const gesture = this._wheelTouchGesture;
-    const touch = event && event.changedTouches && event.changedTouches[0];
-    this._wheelTouchGesture = null;
-    if (!gesture) return;
-    const endX = touch ? touch.clientX : gesture.lastX;
-    const endY = touch ? touch.clientY : gesture.lastY;
-    this.onWheelHorizontalSwipe({
-      deltaX: endX - gesture.startX,
-      deltaY: endY - gesture.startY,
-      stationId: gesture.sourceStationId,
-    });
   },
 
   _getAdjacentTransfer(transfers, step) {

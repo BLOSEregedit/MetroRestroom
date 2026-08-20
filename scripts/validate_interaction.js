@@ -4,7 +4,8 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const catalog = require('../miniprogram/data/catalog');
-const stationMotion = require('../miniprogram/pages/index/station-motion.wxs');
+const wheelPhysics = require('../miniprogram/utils/wheel-physics');
+const { createStationFeedback } = require('../miniprogram/utils/feedback');
 
 let pageDefinition = null;
 const app = { globalData: { cloudReady: false, pendingCorrectionContext: null } };
@@ -94,34 +95,26 @@ assert.strictEqual(directionCase.page._directionMode, 'manual', '方向切换后
 
 const leftSwipeCase = createPage('3', 'forward', '上海火车站');
 leftSwipeCase.page._switchToTransfer = (transfer) => { leftSwipeCase.page._selectedTransfer = transfer; };
-leftSwipeCase.page.onWheelTouchStart({ touches: [{ clientX: 100, clientY: 100 }] });
-leftSwipeCase.page.onWheelTouchMove({ touches: [{ clientX: 30, clientY: 104 }] });
-leftSwipeCase.page.onWheelTouchEnd({ changedTouches: [{ clientX: 0, clientY: 105 }] });
+leftSwipeCase.page.onWheelHorizontalSwipe(-100, 5);
 assert.strictEqual(leftSwipeCase.page._selectedTransfer.lineId, '4', '左滑应选择数值相邻的下一线路');
 
 const rightSwipeCase = createPage('3', 'forward', '上海火车站');
 rightSwipeCase.page._switchToTransfer = (transfer) => { rightSwipeCase.page._selectedTransfer = transfer; };
-rightSwipeCase.page.onWheelTouchStart({ touches: [{ clientX: 100, clientY: 100 }] });
-rightSwipeCase.page.onWheelTouchMove({ touches: [{ clientX: 170, clientY: 96 }] });
-rightSwipeCase.page.onWheelTouchEnd({ changedTouches: [{ clientX: 200, clientY: 95 }] });
+rightSwipeCase.page.onWheelHorizontalSwipe(100, -5);
 assert.strictEqual(rightSwipeCase.page._selectedTransfer.lineId, '1', '右滑应选择数值相邻的上一线路');
 
 const verticalSwipeCase = createPage('3', 'forward', '上海火车站');
 verticalSwipeCase.page._switchToTransfer = (transfer) => {
   verticalSwipeCase.page._selectedTransfer = transfer;
 };
-verticalSwipeCase.page.onWheelTouchStart({ touches: [{ clientX: 100, clientY: 100 }] });
-verticalSwipeCase.page.onWheelTouchMove({ touches: [{ clientX: 110, clientY: 180 }] });
-verticalSwipeCase.page.onWheelTouchEnd({ changedTouches: [{ clientX: 112, clientY: 210 }] });
+verticalSwipeCase.page.onWheelHorizontalSwipe(12, 110);
 assert.strictEqual(verticalSwipeCase.page._selectedTransfer, undefined, '纵滑站点不得误触线路切换');
 
 const shortSwipeCase = createPage('3', 'forward', '上海火车站');
 shortSwipeCase.page._switchToTransfer = (transfer) => {
   shortSwipeCase.page._selectedTransfer = transfer;
 };
-shortSwipeCase.page.onWheelTouchStart({ touches: [{ clientX: 100, clientY: 100 }] });
-shortSwipeCase.page.onWheelTouchMove({ touches: [{ clientX: 65, clientY: 103 }] });
-shortSwipeCase.page.onWheelTouchEnd({ changedTouches: [{ clientX: 61, clientY: 104 }] });
+shortSwipeCase.page.onWheelHorizontalSwipe(-39, 4);
 assert.strictEqual(shortSwipeCase.page._selectedTransfer, undefined, '不足阈值的横向移动不得切线');
 
 const manualAnchorCase = createPage('2', 'forward', '南京东路', peopleSquare.id);
@@ -177,25 +170,36 @@ assert.strictEqual(decorated[1].isActive, true, '切换后的当前站必须输�
 
 assert.strictEqual(decorationCase.page._getReadableLineColor('#FFD100'), '#897616', '3号线亮黄色文字必须自动压暗');
 assert.strictEqual(decorationCase.page._getReadableLineColor('#E3002B'), '#E3002B', '已具备可读性的线路色不应被修改');
-assert.strictEqual(stationMotion.getFocusStrength(0), 1, '第二卡位中心必须是固定最大焦点');
-assert.strictEqual(stationMotion.getFocusStrength(1), 0, '离开第二卡位一个站距后必须恢复常规尺寸');
-const approachSamples = [1, .75, .5, .25, 0].map(stationMotion.getFocusStrength);
+assert.strictEqual(wheelPhysics.getFocusStrength(0), 1, '第二卡位中心必须是固定最大焦点');
+assert.strictEqual(wheelPhysics.getFocusStrength(1), 0, '离开第二卡位一个站距后必须恢复常规尺寸');
+const approachSamples = [1, .75, .5, .25, 0].map(wheelPhysics.getFocusStrength);
 approachSamples.slice(1).forEach((strength, index) => {
   assert(strength > approachSamples[index], '卡片接近第二卡位时焦点强度必须连续单调增加');
 });
 [-.75, -.5, -.25, 0, .25, .5, .75].forEach((distance) => {
   assert.strictEqual(
-    stationMotion.getFocusStrength(distance),
-    stationMotion.getFocusStrength(-distance),
+    wheelPhysics.getFocusStrength(distance),
+    wheelPhysics.getFocusStrength(-distance),
     '焦点放大曲线必须围绕第二卡位对称',
   );
 });
-const halfMotion = stationMotion.getCardMotion(.5);
+const halfMotion = wheelPhysics.getCardMotion(.5, 100);
+assert(Math.abs(halfMotion.focus - .5) < 1e-10, '半程焦点强度必须为 0.5');
+assert.strictEqual(halfMotion.scaleX, 1.0325, '半程横向缩放必须连续插值');
+assert.strictEqual(halfMotion.scaleY, 1.0275, '半程纵向缩放必须连续插值');
+assert.strictEqual(halfMotion.translateY, 5.5, '半程让位必须连续插值');
+
 assert.deepStrictEqual(
-  halfMotion,
-  { focus: .5, scaleX: 1.0325, scaleY: 1.0275, translateY: 7 },
-  '半程卡片必须使用连续的缩放和让位插值',
+  [-1, 0, 1, 2].map((index) => Number(wheelPhysics.getFocusStrength(index - .5).toFixed(4))),
+  [0, .5, .5, 0],
+  '半站拖动时只能由离开和进入第二卡位的两张卡片共享缩放',
 );
+assert.strictEqual(wheelPhysics.getDetentIndex(0, .2, 10), 0, '未跨过站点中心时不得触发反馈');
+assert.strictEqual(wheelPhysics.getDetentIndex(0, 0, 10), 0, '首端回弹不得重复触发反馈');
+assert.strictEqual(wheelPhysics.getDetentIndex(0, 3.2, 10), 3, '单帧跨多站必须完整计算反馈数量');
+assert.strictEqual(wheelPhysics.getDetentIndex(3, 2.8, 10), 3, '反向但未跨中心时不得提前反馈');
+assert.strictEqual(wheelPhysics.getDetentIndex(3, 2, 10), 2, '反向跨回站点中心时必须反馈一次');
+assert.strictEqual(wheelPhysics.clampWheelVelocity(5000, 100), 2200, '高速甩动必须限制为可感知的最大站速');
 
 const transitionCase = createPage('2', 'forward', '南京东路', peopleSquare.id);
 transitionCase.page.data.stations = transitionCase.page._decorateStations(
@@ -203,19 +207,18 @@ transitionCase.page.data.stations = transitionCase.page._decorateStations(
   transitionCase.page.data.currentIndex,
   transitionCase.page.data.lineColor,
 );
-transitionCase.page.data.motionCommitVersion = 3;
 transitionCase.page._updateSyncStatus = () => { transitionCase.page._syncUpdated = true; };
 transitionCase.page._scheduleSyncForVisibleStation = () => { transitionCase.page._syncScheduled = true; };
 const transitionCurrentIndex = transitionCase.page.data.currentIndex;
-transitionCase.page.onStationAnimationFinish({ currentIndex: transitionCurrentIndex + 1 });
+transitionCase.page.onWheelSettled(transitionCurrentIndex + 1);
 assert.strictEqual(transitionCase.page.data.currentIndex, transitionCurrentIndex + 1, '吸附结束后才可提交最终焦点站');
-assert.strictEqual(transitionCase.page.data.motionCommitVersion, 4, '每次吸附结束必须通知 WXS 清理视图层样式');
 assert.strictEqual(transitionCase.page.data.stations[transitionCurrentIndex + 1].isActive, true, '最终焦点卡必须在吸附结束后激活');
 assert.strictEqual(transitionCase.page.data.stations[transitionCurrentIndex].isActive, false, '原焦点卡必须在吸附结束后恢复常规状态');
 assert.strictEqual(transitionCase.page._syncUpdated, true, '焦点切换完成后必须刷新同步状态');
 assert.strictEqual(transitionCase.page._syncScheduled, true, '焦点切换完成后必须调度站点同步');
-transitionCase.page.onStationAnimationFinish({ currentIndex: transitionCurrentIndex + 1 });
-assert.strictEqual(transitionCase.page.data.motionCommitVersion, 5, '回弹到原站也必须通知 WXS 清理视图层样式');
+transitionCase.page._syncUpdated = false;
+transitionCase.page.onWheelSettled(transitionCurrentIndex + 1);
+assert.strictEqual(transitionCase.page._syncUpdated, false, '重复吸附到同一站不得重复提交业务状态');
 
 const drawerCase = createPage('3', 'forward', '上海火车站');
 const groups = drawerCase.page._buildDrawerGroups(drawerCase.station.restrooms);
@@ -277,19 +280,31 @@ const homepageWxss = fs.readFileSync(
   path.resolve(__dirname, '../miniprogram/pages/index/index.wxss'),
   'utf8',
 );
-const stationMotionWxs = fs.readFileSync(
-  path.resolve(__dirname, '../miniprogram/pages/index/station-motion.wxs'),
+const homepageJson = JSON.parse(fs.readFileSync(
+  path.resolve(__dirname, '../miniprogram/pages/index/index.json'),
   'utf8',
-);
-assert(homepageWxml.includes('display-multiple-items="4"'), '首页焦点之后必须展示 4 个站点行');
-assert(homepageWxml.includes('previous-margin="{{stationPreviousMargin}}"'), '首页必须动态露出一个前置站点，使焦点位于第二位');
-assert(homepageWxml.includes('<wxs module="stationMotion"'), '首页必须加载站点 WXS 动效模块');
-assert(homepageWxml.includes('data-current-index="{{currentIndex}}"'), 'WXS 每次手势必须从原生 swiper 数据集锁定当前锚点');
-assert(homepageWxml.includes('motionstate="{{motionCommitVersion}}"'), '每次吸附提交必须触发独立的 WXS 状态观察属性');
-assert(homepageWxml.includes('change:motionstate="{{stationMotion.onSettledStateChange}}"'), '吸附提交后必须清理视图层临时样式');
-assert(homepageWxml.includes('bindtransition="{{stationMotion.onTransition}}"'), '站点轮播必须在视图层更新焦点动效');
-assert(homepageWxml.includes('bindanimationfinish="{{stationMotion.onAnimationFinish}}"'), '站点轮播吸附结束必须由 WXS 提交最终焦点');
-assert(!homepageWxml.includes('bindchange='), '站点轮播不得在 change 阶段回写受控 current');
+));
+const projectConfig = JSON.parse(fs.readFileSync(
+  path.resolve(__dirname, '../project.config.json'),
+  'utf8',
+));
+assert.strictEqual(homepageJson.renderer, 'skyline', '首页必须使用 Skyline 渲染器');
+assert.strictEqual(homepageJson.componentFramework, 'glass-easel', 'Skyline 首页必须使用 glass-easel');
+assert.strictEqual(homepageJson.navigationStyle, 'custom', 'Skyline 首页必须使用自定义导航栏');
+assert.strictEqual(projectConfig.setting.compileWorklet, true, '项目必须开启 Worklet 编译');
+assert(!homepageWxml.includes('<swiper'), '首页不得继续使用无法控制惯性的 swiper');
+assert(!homepageWxml.includes('<wxs '), 'Skyline 首页不得继续加载 WebView WXS 动效');
+assert(homepageWxml.includes('class="station-wheel-scroll"'), '首页必须使用独立纵向 scroll-view 轮盘');
+assert(homepageWxml.includes('type="list"'), 'Skyline scroll-view 必须显式声明 list 类型');
+assert(homepageWxml.includes('wheelTopSpacerHeight'), '轮盘必须预留一个顶部站位，使焦点固定在第二位');
+assert(homepageWxml.includes('wheelBottomSpacerHeight'), '轮盘必须为末站保留第二卡位后的空间');
+assert(homepageWxml.includes('worklet:onscrollupdate="onWheelScrollUpdate"'), '连续缩放必须由 UI 线程滚动坐标驱动');
+assert(homepageWxml.includes('worklet:onscrollend="onWheelScrollEnd"'), '惯性结束后必须在 UI 线程吸附');
+assert(homepageWxml.includes('worklet:adjust-deceleration-velocity="adjustWheelDecelerationVelocity"'), '高速甩动必须保留原生速度惯性并限制极端速度');
+assert(homepageWxml.includes('horizontal-drag-gesture-handler'), '横滑换乘必须迁移到 Skyline 手势系统');
+assert(!homepageWxml.includes('capture-bind:touchmove'), '逻辑层不得继续接收每一帧 touchmove');
+assert(homepageWxml.includes('id="station-card-{{index}}"'), '每张卡片必须暴露独立 Worklet 动画节点');
+assert(homepageWxml.includes('class="custom-nav"'), '自定义导航栏不得因 Skyline 迁移丢失');
 assert(!homepageWxml.includes('station-focus-lens'), '第二卡位不得保留固定背景光场');
 assert(!homepageWxml.includes('station.contentMotionStyle'), '卡片内容不得通过逻辑层逐帧修改布局');
 assert(!homepageWxml.includes('station.motionStyle'), '卡片壳层不得通过逻辑层逐帧 setData');
@@ -298,15 +313,13 @@ assert(homepageWxml.includes('style="color: {{group.lineTextColor}};"'), '抽屉
 assert(homepageWxml.includes('class="line-picker-pill'), '线路选择器必须使用胶囊结构');
 assert(homepageWxml.includes('background-color: {{line.color}};'), '线路选择器胶囊必须显示官方线路色标记');
 assert(homepageWxml.includes('class="station-card-shell'), '卡片必须使用统一圆角阴影壳层');
-assert(homepageWxml.includes('station-motion-card'), '卡片必须暴露 WXS 视图层选择器');
-assert(homepageWxml.includes('data-motion-index="{{index}}"'), '卡片必须向 WXS 暴露连续站点索引');
 assert(homepageWxml.includes('当前计算起点'), '首页必须显式标注计算起点');
 assert(homepageWxml.includes('bindtap="onSelectTransferLine"'), '换乘线路胶囊必须可点击');
-assert(homepageWxml.includes('capture-bind:touchstart="onWheelTouchStart"'), '站点区域必须保留横滑换乘起点识别');
-assert(homepageWxml.includes('capture-bind:touchmove="onWheelTouchMove"'), 'touchmove 只能识别横纵手势，不得驱动动画');
-assert(homepageWxml.includes('capture-bind:touchend="onWheelTouchEnd"'), '站点区域必须处理横滑结束');
-assert(homepageWxml.includes('capture-bind:touchcancel="onWheelTouchCancel"'), '站点区域必须处理 touchcancel');
 assert(!homepageJs.includes('_applyStationMotionByDy'), '逻辑层 touchmove 不得继续写卡片动效');
+assert(homepageJs.includes('this.applyAnimatedStyle'), '卡片 transform 必须通过 Worklet 动画样式更新');
+assert(homepageJs.includes('getCardMotion(stationIndex - position.value'), '卡片尺寸必须只依赖连续虚拟焦点位置');
+assert(homepageJs.includes('runOnJS(this.onWheelDetents.bind(this))'), '跨站时必须仅把离散反馈事件送回逻辑层');
+assert(homepageJs.includes('scrollViewContext.scrollTo'), '惯性结束后必须在 UI 线程完成站点吸附');
 assert(homepageWxml.includes('wx:for="{{drawerGroups}}"'), '多厕所抽屉必须按线路分组');
 assert(homepageWxml.includes('信息有误？反馈'), '抽屉必须保留弱化反馈入口');
 assert(homepageWxml.includes('bindtap="onSetManualAnchor"'), '站点圆点必须可锁定手动起点');
@@ -327,10 +340,31 @@ assert(!homepageWxss.includes('.station-focus-lens'), '样式中不得残留固�
 assert(/\.line-picker-pill\s*\{[^}]*border-radius:\s*999rpx/.test(homepageWxss), '线路选择项必须使用胶囊样式');
 assert(!homepageWxss.includes('0 0 30rpx rgba(85,181,190'), '焦点卡片不得使用会被轮盘裁成矩形的外扩背光');
 assert(!/\.eta-label\s*\{[^}]*color:/.test(homepageWxss), 'ETA 不得继续使用固定红色');
-assert(/\.page\s*\{[^}]*padding:\s*24rpx\s+28rpx\s+16rpx/.test(homepageWxss), '原生 TabBar 页面不得重复预留大块底部空间');
-assert(stationMotionWxs.includes('requestAnimationFrame'), 'WXS 必须按最新进度合并到视图帧');
-assert(stationMotionWxs.includes("setStyle({"), 'WXS 必须直接在视图层更新卡片 transform');
-assert(!stationMotionWxs.includes('setData'), '拖动过程不得回到逻辑层 setData');
-assert(stationMotionWxs.includes("callMethod('onStationAnimationFinish'"), 'WXS 只能在吸附结束后提交业务索引');
+assert(/\.home-content\s*\{[^}]*padding:\s*8rpx\s+28rpx\s+16rpx/.test(homepageWxss), '首页主体必须保留紧凑底部空间');
+assert(!homepageWxss.includes('inline-flex'), 'Skyline 首页不得使用不稳定的 inline-flex 布局');
 
-console.log('首页交互验收通过：方向保持、圆点锁定、横纵手势、三线换乘、定位针、抽屉分组和跨线路纠错上下文。');
+const audioCreateOptions = [];
+let audioPlayCount = 0;
+let audioDestroyCount = 0;
+let hapticCount = 0;
+global.wx = {
+  createInnerAudioContext(options) {
+    audioCreateOptions.push(options);
+    return {
+      play() { audioPlayCount += 1; },
+      destroy() { audioDestroyCount += 1; },
+      onError() {},
+    };
+  },
+  vibrateShort() { hapticCount += 1; },
+};
+const feedback = createStationFeedback({ soundEnabled: true, vibrationEnabled: true });
+assert.strictEqual(audioCreateOptions.length, 2, '短音效必须预创建双实例池');
+assert(audioCreateOptions.every((option) => option.useWebAudioImplement === true), '高频短音效必须开启 WebAudio 底层');
+feedback.playDetents(1);
+assert.strictEqual(audioPlayCount, 1, '每个正常速率站点 detent 必须立即播放一次音效');
+assert.strictEqual(hapticCount, 1, '首个站点 detent 必须触发一次轻触感');
+feedback.destroy();
+assert.strictEqual(audioDestroyCount, 2, '页面卸载必须释放完整音频池');
+
+console.log('首页交互验收通过：Skyline 连续轮盘、逐站反馈、速度惯性、横滑换乘、定位针、抽屉分组和跨线路纠错上下文。');

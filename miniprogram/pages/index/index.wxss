@@ -1,4 +1,7 @@
-.page { display: flex; height: 100vh; min-height: 0; box-sizing: border-box; flex-direction: column; overflow: hidden; padding: 24rpx 28rpx 16rpx; background: #f6f7f8; color: #1f2429; font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+.page { display: flex; height: 100vh; min-height: 0; box-sizing: border-box; flex-direction: column; overflow: hidden; background: #f6f7f8; color: #1f2429; font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+.custom-nav { display: flex; width: 100%; flex: none; align-items: center; justify-content: center; box-sizing: border-box; background: #f6f7f8; }
+.custom-nav__title { color: #15191d; font-size: 30rpx; font-weight: 500; }
+.home-content { display: flex; min-height: 0; flex: 1; box-sizing: border-box; flex-direction: column; overflow: hidden; padding: 8rpx 28rpx 16rpx; }
 .control-card { position: relative; z-index: 2; padding: 22rpx 26rpx 18rpx; border: 1rpx solid rgba(24,32,40,.07); border-radius: 28rpx; background: rgba(255,255,255,.96); box-shadow: 0 12rpx 40rpx rgba(33,42,52,.08); }
 .control-row { display: flex; align-items: center; justify-content: space-between; }
 .control-row--second { align-items: flex-end; margin-top: 18rpx; }
@@ -33,14 +36,15 @@
 .sync-bar__action { min-width: 122rpx; margin-left: 18rpx; padding: 8rpx 14rpx; border: 1rpx solid #d8dde1; border-radius: 999rpx; background: #fff; color: #59626c; font-size: 21rpx; line-height: 1.4; }
 .sync-bar__action[disabled] { opacity: .48; }
 .route-selector { width: 100%; margin-top: 16rpx; white-space: nowrap; }
-.route-selector__content { display: inline-flex; gap: 12rpx; padding-right: 20rpx; }
-.route-pill { display: inline-flex; min-height: 50rpx; align-items: center; box-sizing: border-box; padding: 0 18rpx; border: 1rpx solid #d8dde1; border-radius: 999rpx; background: #f6f7f8; color: #69727b; font-size: 22rpx; }
+.route-selector__content { display: flex; flex-direction: row; gap: 12rpx; padding-right: 20rpx; }
+.route-pill { display: flex; min-height: 50rpx; flex: none; align-items: center; box-sizing: border-box; padding: 0 18rpx; border: 1rpx solid #d8dde1; border-radius: 999rpx; background: #f6f7f8; color: #69727b; font-size: 22rpx; }
 .route-pill--selected { border-color: currentColor; background: #fff; color: #cf4d4d; font-weight: 600; }
 .wheel-heading { display: flex; justify-content: space-between; margin: 10rpx 10rpx 4rpx; color: #59626c; font-size: 25rpx; }
 .wheel-tip { color: #9ba2a9; font-size: 21rpx; }
-.station-wheel { position: relative; min-height: 0; flex: 1; }
-.station-swiper { height: 100%; min-height: 0; }
-.station-row { display: flex; height: 100%; align-items: center; box-sizing: border-box; }
+.station-wheel { position: relative; min-height: 0; flex: 1; overflow: hidden; }
+.station-wheel-scroll { width: 100%; height: 100%; min-height: 0; }
+.wheel-spacer { width: 100%; flex: none; }
+.station-row { display: flex; width: 100%; flex: none; align-items: center; box-sizing: border-box; }
 .track-column { position: relative; display: flex; width: 72rpx; flex: none; align-self: stretch; align-items: center; justify-content: center; }
 .track-line { position: absolute; top: 0; bottom: 0; left: 34rpx; width: 5rpx; opacity: .72; }
 .station-dot { position: relative; z-index: 1; width: 24rpx; height: 24rpx; box-sizing: border-box; border: 5rpx solid; border-radius: 50%; background: #f6f7f8; box-shadow: 0 0 0 5rpx #f6f7f8; }
@@ -75,8 +79,8 @@
 .transfer-strip__label { margin-right: 8rpx; font-weight: 700; }
 .transfer-strip__hint { margin-left: 8rpx; color: #98a2b3; }
 .transfer-scroll { min-width: 0; flex: 1; white-space: nowrap; }
-.transfer-scroll__content { display: inline-flex; align-items: center; gap: 8rpx; padding-right: 8rpx; }
-.transfer-pill { display: inline-flex; height: 34rpx; align-items: center; box-sizing: border-box; gap: 6rpx; padding: 0 10rpx; border: 1rpx solid; border-radius: 999rpx; background: #fff; color: #59626c; font-size: 18rpx; font-weight: 600; }
+.transfer-scroll__content { display: flex; align-items: center; gap: 8rpx; padding-right: 8rpx; }
+.transfer-pill { display: flex; height: 34rpx; flex: none; align-items: center; box-sizing: border-box; gap: 6rpx; padding: 0 10rpx; border: 1rpx solid; border-radius: 999rpx; background: #fff; color: #59626c; font-size: 18rpx; font-weight: 600; }
 .transfer-pill--current { background: #f2f4f7; }
 .transfer-pill__mark { width: 10rpx; height: 10rpx; flex: none; border-radius: 50%; }
 .empty-station-card { min-height: 94rpx; padding: 12rpx 20rpx; background: #e8ebed; }
@@ -84,7 +88,7 @@
 .empty-text { color: #929aa2; font-size: 22rpx; }
 .unavailable-station-card { min-height: 122rpx; padding: 10rpx 20rpx; border: 2rpx solid #e4b254; background: #fffaf0; }
 .unavailable-message { display: flex; align-items: center; gap: 10rpx; margin-top: 6rpx; color: #9a6b19; font-size: 25rpx; font-weight: 600; }
-.unavailable-mark { display: inline-flex; width: 26rpx; height: 26rpx; align-items: center; justify-content: center; border-radius: 50%; background: #dca742; color: #fff; font-size: 19rpx; }
+.unavailable-mark { display: flex; width: 26rpx; height: 26rpx; align-items: center; justify-content: center; border-radius: 50%; background: #dca742; color: #fff; font-size: 19rpx; }
 .unavailable-tip { display: block; overflow: hidden; margin-top: 4rpx; color: #9c8b68; font-size: 21rpx; text-overflow: ellipsis; white-space: nowrap; }
 .overlay { position: fixed; z-index: 20; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: flex-end; background: rgba(24,31,37,.38); }
 .picker-sheet,.drawer-sheet { width: 100%; box-sizing: border-box; border-radius: 32rpx 32rpx 0 0; background: #fff; }

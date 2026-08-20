@@ -15,6 +15,14 @@
   "sitemapLocation": "sitemap.json",
   "style": "v2",
   "lazyCodeLoading": "requiredComponents",
+  "rendererOptions": {
+    "skyline": {
+      "defaultDisplayBlock": true,
+      "defaultContentBox": true,
+      "tagNameStyleIsolation": "legacy",
+      "disableABTest": true
+    }
+  },
   "permission": {
     "scope.userLocation": {
       "desc": "用于判断你附近的地铁站，便于展示厕所信息"

@@ -1,5 +1,8 @@
-<wxs module="stationMotion" src="./station-motion.wxs"></wxs>
 <view class="page">
+  <view class="custom-nav" style="height: {{navigationBarHeight}}px; padding-top: {{statusBarHeight}}px;">
+    <text class="custom-nav__title">MetroRestroom</text>
+  </view>
+  <view class="home-content">
   <view class="control-card">
     <view class="control-row control-row--first">
       <text class="city-name">{{cityName}}</text>
@@ -25,7 +28,7 @@
         <text wx:if="{{showLocationAction}}" class="mode-action">{{locationActionLabel}}</text>
       </view>
     </view>
-    <scroll-view wx:if="{{showRouteSelector}}" class="route-selector" scroll-x enhanced show-scrollbar="{{false}}">
+    <scroll-view wx:if="{{showRouteSelector}}" class="route-selector" type="list" scroll-x enhanced show-scrollbar="{{false}}">
       <view class="route-selector__content">
         <view wx:for="{{routeOptions}}" wx:for-item="route" wx:key="id" class="route-pill {{route.id === routeId ? 'route-pill--selected' : ''}}" data-route-id="{{route.id}}" bindtap="onSelectRoute">
           <text>{{route.terminalName || route.name}}</text>
@@ -40,22 +43,37 @@
   </view>
 
   <view class="wheel-heading"><text>沿线路浏览</text><text class="wheel-tip">点圆点锁定起点</text></view>
-  <view class="station-wheel" motionstate="{{motionCommitVersion}}" change:motionstate="{{stationMotion.onSettledStateChange}}">
-    <swiper class="station-swiper" data-current-index="{{currentIndex}}" vertical display-multiple-items="4" previous-margin="{{stationPreviousMargin}}" snap-to-edge="{{false}}" current="{{currentIndex}}" duration="180" bindtransition="{{stationMotion.onTransition}}" bindanimationfinish="{{stationMotion.onAnimationFinish}}" capture-bind:touchstart="onWheelTouchStart" capture-bind:touchmove="onWheelTouchMove" capture-bind:touchend="onWheelTouchEnd" capture-bind:touchcancel="onWheelTouchCancel">
-    <swiper-item wx:for="{{stations}}" wx:for-item="station" wx:key="id">
-      <view class="station-row">
+  <view class="station-wheel">
+    <horizontal-drag-gesture-handler native-view="scroll-view" worklet:ongesture="onWheelHorizontalGesture">
+      <scroll-view
+        class="station-wheel-scroll"
+        type="list"
+        scroll-y
+        enhanced
+        bounces="{{true}}"
+        show-scrollbar="{{false}}"
+        cache-extent="5000"
+        scroll-top="{{wheelScrollTop}}"
+        binddragstart="onWheelDragStart"
+        worklet:onscrollstart="onWheelScrollStart"
+        worklet:onscrollupdate="onWheelScrollUpdate"
+        worklet:onscrollend="onWheelScrollEnd"
+        worklet:adjust-deceleration-velocity="adjustWheelDecelerationVelocity"
+      >
+      <view class="wheel-spacer" list-item style="height: {{wheelTopSpacerHeight}}px;"></view>
+      <view wx:for="{{stations}}" wx:for-item="station" wx:key="id" list-item class="station-row station-motion-row" data-motion-index="{{index}}" style="height: {{wheelSlotHeight}}px;">
         <view class="track-column">
           <view class="track-line" style="background-color: {{lineColor}};"></view>
           <view wx:if="{{station.isSystemOrigin}}" class="location-pin" style="background-color: {{lineColor}};"><view class="location-pin__core"></view></view>
           <view wx:elif="{{station.isOrigin && isManualAnchor}}" class="location-pin location-pin--manual" data-station-id="{{station.id}}" bindtap="onSetManualAnchor"><view class="location-pin__core"></view></view>
           <view wx:else class="station-dot" data-station-id="{{station.id}}" bindtap="onSetManualAnchor" style="{{station.dotStyle}}"></view>
         </view>
-        <view class="station-card-shell station-motion-card {{station.isActive ? 'station-card-shell--active' : ''}} {{station.isBeforeFocus ? 'station-card-shell--before-focus' : ''}} {{station.isAfterFocus ? 'station-card-shell--after-focus' : ''}}" data-motion-index="{{index}}">
+        <view id="station-card-{{index}}" class="station-card-shell station-motion-card {{station.isActive ? 'station-card-shell--active' : ''}} {{station.isBeforeFocus ? 'station-card-shell--before-focus' : ''}} {{station.isAfterFocus ? 'station-card-shell--after-focus' : ''}}" data-motion-index="{{index}}">
           <view wx:if="{{station.dataState === 'unavailable'}}" class="unavailable-station-card">
             <text class="station-name">{{station.name}}</text>
             <view wx:if="{{station.isActive && station.transfers && station.transfers.length}}" class="transfer-strip">
               <text class="transfer-strip__label">线路</text>
-              <scroll-view class="transfer-scroll" scroll-x enhanced show-scrollbar="{{false}}"><view class="transfer-scroll__content"><view class="transfer-pill transfer-pill--current" style="border-color: {{lineColor}};"><text class="transfer-pill__mark" style="background-color: {{lineColor}};"></text><text>{{lineName}}</text></view><view wx:for="{{station.transfers}}" wx:for-item="transfer" wx:key="lineId" class="transfer-pill" data-line-id="{{transfer.lineId}}" data-station-id="{{transfer.stationId}}" bindtap="onSelectTransferLine" style="border-color: {{transfer.lineColor}};"><text class="transfer-pill__mark" style="background-color: {{transfer.lineColor}};"></text><text>{{transfer.lineName}}</text></view></view></scroll-view>
+              <scroll-view class="transfer-scroll" type="list" scroll-x enhanced show-scrollbar="{{false}}"><view class="transfer-scroll__content"><view class="transfer-pill transfer-pill--current" style="border-color: {{lineColor}};"><text class="transfer-pill__mark" style="background-color: {{lineColor}};"></text><text>{{lineName}}</text></view><view wx:for="{{station.transfers}}" wx:for-item="transfer" wx:key="lineId" class="transfer-pill" data-line-id="{{transfer.lineId}}" data-station-id="{{transfer.stationId}}" bindtap="onSelectTransferLine" style="border-color: {{transfer.lineColor}};"><text class="transfer-pill__mark" style="background-color: {{transfer.lineColor}};"></text><text>{{transfer.lineName}}</text></view></view></scroll-view>
               <text class="transfer-strip__hint">横滑</text>
             </view>
             <view class="unavailable-message"><text class="unavailable-mark">!</text><text>数据暂不可用</text></view>
@@ -65,7 +83,7 @@
             <view class="station-card__header"><text class="station-name">{{station.name}}</text><view class="station-card__labels"><text wx:if="{{station.primaryRestroom.hasOperationalIssue}}" class="operational-label operational-label--{{station.primaryRestroom.restroomStatus}}">{{station.primaryRestroom.statusLabel}}</text><view wx:if="{{station.showReverse}}" class="reverse-indicator" aria-label="需调头"><view class="reverse-indicator__curve"><view class="reverse-indicator__arrow"></view></view></view></view></view>
             <view wx:if="{{station.isActive && station.transfers && station.transfers.length}}" class="transfer-strip">
               <text class="transfer-strip__label">线路</text>
-              <scroll-view class="transfer-scroll" scroll-x enhanced show-scrollbar="{{false}}">
+              <scroll-view class="transfer-scroll" type="list" scroll-x enhanced show-scrollbar="{{false}}">
                 <view class="transfer-scroll__content">
                   <view class="transfer-pill transfer-pill--current" style="border-color: {{lineColor}};"><text class="transfer-pill__mark" style="background-color: {{lineColor}};"></text><text>{{lineName}}</text></view>
                   <view wx:for="{{station.transfers}}" wx:for-item="transfer" wx:key="lineId" class="transfer-pill" data-line-id="{{transfer.lineId}}" data-station-id="{{transfer.stationId}}" bindtap="onSelectTransferLine" style="border-color: {{transfer.lineColor}};"><text class="transfer-pill__mark" style="background-color: {{transfer.lineColor}};"></text><text>{{transfer.lineName}}</text></view>
@@ -81,36 +99,38 @@
             <view class="empty-station-card__header"><text class="station-name">{{station.name}}</text><text class="empty-text">暂无厕所记录</text></view>
             <view wx:if="{{station.isActive && station.transfers && station.transfers.length}}" class="transfer-strip">
               <text class="transfer-strip__label">线路</text>
-              <scroll-view class="transfer-scroll" scroll-x enhanced show-scrollbar="{{false}}"><view class="transfer-scroll__content"><view class="transfer-pill transfer-pill--current" style="border-color: {{lineColor}};"><text class="transfer-pill__mark" style="background-color: {{lineColor}};"></text><text>{{lineName}}</text></view><view wx:for="{{station.transfers}}" wx:for-item="transfer" wx:key="lineId" class="transfer-pill" data-line-id="{{transfer.lineId}}" data-station-id="{{transfer.stationId}}" bindtap="onSelectTransferLine" style="border-color: {{transfer.lineColor}};"><text class="transfer-pill__mark" style="background-color: {{transfer.lineColor}};"></text><text>{{transfer.lineName}}</text></view></view></scroll-view>
+              <scroll-view class="transfer-scroll" type="list" scroll-x enhanced show-scrollbar="{{false}}"><view class="transfer-scroll__content"><view class="transfer-pill transfer-pill--current" style="border-color: {{lineColor}};"><text class="transfer-pill__mark" style="background-color: {{lineColor}};"></text><text>{{lineName}}</text></view><view wx:for="{{station.transfers}}" wx:for-item="transfer" wx:key="lineId" class="transfer-pill" data-line-id="{{transfer.lineId}}" data-station-id="{{transfer.stationId}}" bindtap="onSelectTransferLine" style="border-color: {{transfer.lineColor}};"><text class="transfer-pill__mark" style="background-color: {{transfer.lineColor}};"></text><text>{{transfer.lineName}}</text></view></view></scroll-view>
               <text class="transfer-strip__hint">横滑</text>
             </view>
           </view>
         </view>
       </view>
-    </swiper-item>
-    </swiper>
+      <view class="wheel-spacer" list-item style="height: {{wheelBottomSpacerHeight}}px;"></view>
+      </scroll-view>
+    </horizontal-drag-gesture-handler>
+  </view>
   </view>
 
   <view wx:if="{{showLinePicker}}" class="overlay" bindtap="onCloseLinePicker">
     <view class="picker-sheet" catchtap="onStopPropagation"><view class="sheet-handle"></view><view class="sheet-title">选择浏览线路</view>
-      <scroll-view class="line-picker-list" scroll-y><view class="line-picker-grid"><view wx:for="{{lineOptions}}" wx:for-item="line" wx:key="id" class="line-picker-pill {{line.id === lineId ? 'line-picker-pill--selected' : ''}}" data-line-id="{{line.id}}" bindtap="onSelectLine" style="border-color: {{line.color}}; color: {{line.textColor}};"><text class="line-picker-pill__mark" style="background-color: {{line.color}};"></text><text class="line-picker-pill__name">{{line.name}}</text><text wx:if="{{line.id === lineId}}" class="line-picker-pill__current">当前</text></view></view></scroll-view>
+      <scroll-view class="line-picker-list" type="list" scroll-y><view class="line-picker-grid"><view wx:for="{{lineOptions}}" wx:for-item="line" wx:key="id" class="line-picker-pill {{line.id === lineId ? 'line-picker-pill--selected' : ''}}" data-line-id="{{line.id}}" bindtap="onSelectLine" style="border-color: {{line.color}}; color: {{line.textColor}};"><text class="line-picker-pill__mark" style="background-color: {{line.color}};"></text><text class="line-picker-pill__name">{{line.name}}</text><text wx:if="{{line.id === lineId}}" class="line-picker-pill__current">当前</text></view></view></scroll-view>
     </view>
   </view>
   <view wx:if="{{showStationPicker}}" class="overlay" bindtap="onCloseStationPicker">
     <view class="picker-sheet" catchtap="onStopPropagation"><view class="sheet-handle"></view><view class="sheet-title">选择计算起点</view>
-      <scroll-view class="picker-list" scroll-y><view wx:for="{{stations}}" wx:for-item="station" wx:key="id" class="picker-item {{station.id === originStationId ? 'picker-item--selected' : ''}}" data-station-id="{{station.id}}" bindtap="onSelectOriginStation"><text>{{station.name}}</text><text wx:if="{{station.id === originStationId}}" class="selected-mark">✓</text></view></scroll-view>
+      <scroll-view class="picker-list" type="list" scroll-y><view wx:for="{{stations}}" wx:for-item="station" wx:key="id" class="picker-item {{station.id === originStationId ? 'picker-item--selected' : ''}}" data-station-id="{{station.id}}" bindtap="onSelectOriginStation"><text>{{station.name}}</text><text wx:if="{{station.id === originStationId}}" class="selected-mark">✓</text></view></scroll-view>
     </view>
   </view>
   <view wx:if="{{showLocationCandidates}}" class="overlay" bindtap="onCloseLocationCandidates">
     <view class="picker-sheet location-sheet" catchtap="onStopPropagation"><view class="sheet-handle"></view><view class="sheet-title">你可能在这些站点</view><text class="sheet-subtitle">请选择当前所在的线路，确认后才会更新计算起点</text>
-      <scroll-view class="picker-list location-candidate-list" scroll-y><view wx:for="{{locationCandidates}}" wx:for-item="candidate" wx:key="lineStationId" class="picker-item location-candidate" data-station-id="{{candidate.lineStationId}}" bindtap="onSelectLocationCandidate"><view><text class="candidate-station">{{candidate.stationName}}</text><text class="candidate-line">{{candidate.lineName}}</text></view><text class="candidate-distance">{{candidate.distanceLabel}}</text></view></scroll-view>
+      <scroll-view class="picker-list location-candidate-list" type="list" scroll-y><view wx:for="{{locationCandidates}}" wx:for-item="candidate" wx:key="lineStationId" class="picker-item location-candidate" data-station-id="{{candidate.lineStationId}}" bindtap="onSelectLocationCandidate"><view><text class="candidate-station">{{candidate.stationName}}</text><text class="candidate-line">{{candidate.lineName}}</text></view><text class="candidate-distance">{{candidate.distanceLabel}}</text></view></scroll-view>
       <view class="location-manual-action" bindtap="onChooseManualLocation">改为手动选择</view>
     </view>
   </view>
   <view wx:if="{{showRestroomDrawer}}" class="overlay" bindtap="onCloseRestroomDrawer">
     <view class="drawer-sheet" catchtap="onStopPropagation"><view class="sheet-handle"></view>
       <view class="drawer-header"><view><view class="sheet-title">{{drawerStation.name}}</view><text class="drawer-count">共 {{drawerRestrooms.length}} 处厕所</text></view><text class="drawer-close" bindtap="onCloseRestroomDrawer">×</text></view>
-      <scroll-view class="drawer-list" scroll-y>
+      <scroll-view class="drawer-list" type="list" scroll-y>
         <view wx:for="{{drawerGroups}}" wx:for-item="group" wx:key="lineId" class="drawer-group">
           <view class="drawer-group__header"><text class="drawer-group__mark" style="background-color: {{group.lineColor}};"></text><text class="drawer-group__name">{{group.lineName}}</text><text wx:if="{{group.isCurrent}}" class="drawer-group__current">当前线路</text></view>
           <view wx:for="{{group.restrooms}}" wx:for-item="restroom" wx:key="id" class="drawer-item">

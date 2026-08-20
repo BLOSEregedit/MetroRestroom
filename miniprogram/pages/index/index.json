@@ -1,4 +1,8 @@
 {
+  "renderer": "skyline",
+  "componentFramework": "glass-easel",
+  "navigationStyle": "custom",
+  "disableScroll": true,
   "navigationBarTitleText": "MetroRestroom",
   "navigationBarBackgroundColor": "#F6F7F8",
   "navigationBarTextStyle": "black",
