@@ -529,31 +529,28 @@ assert(/\.sync-bar__action\s*\{[^}]*background:\s*transparent/.test(homepageWxss
 assert(homepageWxss.includes('@keyframes sync-spin'), '更新图标必须具有旋转关键帧');
 assert(!homepageWxss.includes('0 0 30rpx rgba(85,181,190'), '焦点卡片不得使用会被轮盘裁成矩形的外扩背光');
 assert(!/\.eta-label\s*\{[^}]*color:/.test(homepageWxss), 'ETA 不得继续使用固定红色');
-assert(/\.home-content\s*\{[^}]*padding:\s*8rpx\s+28rpx\s+calc\(96rpx\s+\+\s+env\(safe-area-inset-bottom\)\)/.test(homepageWxss), '首页主体必须为自定义底部导航预留精确空间');
+assert(/\.home-content\s*\{[^}]*padding:\s*8rpx\s+28rpx\s+16rpx/.test(homepageWxss), '原生底部导航会自动占位，首页主体只应保留常规底部间距');
 assert(!homepageWxss.includes('inline-flex'), 'Skyline 首页不得使用不稳定的 inline-flex 布局');
 const appConfig = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../miniprogram/app.json'), 'utf8'));
-const customTabBarWxml = fs.readFileSync(
-  path.resolve(__dirname, '../miniprogram/custom-tab-bar/index.wxml'),
-  'utf8',
+const profileJs = fs.readFileSync(path.resolve(__dirname, '../miniprogram/pages/profile/index.js'), 'utf8');
+const profileWxss = fs.readFileSync(path.resolve(__dirname, '../miniprogram/pages/profile/index.wxss'), 'utf8');
+const customTabBarPath = path.resolve(__dirname, '../miniprogram/custom-tab-bar');
+assert.notStrictEqual(appConfig.tabBar.custom, true, '真机底部导航必须由微信原生 TabBar 渲染');
+assert.strictEqual(appConfig.tabBar.list.length, 2, '原生底部导航必须保留首页和我的两个入口');
+assert.deepStrictEqual(
+  appConfig.tabBar.list.map(({ pagePath, text, iconPath, selectedIconPath }) => ({
+    pagePath, text, iconPath, selectedIconPath,
+  })),
+  [
+    { pagePath: 'pages/index/index', text: '首页', iconPath: 'images/icons/home.png', selectedIconPath: 'images/icons/home-active.png' },
+    { pagePath: 'pages/profile/index', text: '我的', iconPath: 'images/icons/usercenter.png', selectedIconPath: 'images/icons/usercenter-active.png' },
+  ],
+  '原生底部导航的页面、文字和图标路径不得偏移',
 );
-const customTabBarWxss = fs.readFileSync(
-  path.resolve(__dirname, '../miniprogram/custom-tab-bar/index.wxss'),
-  'utf8',
-);
-assert.strictEqual(appConfig.tabBar.custom, true, '底部导航必须启用自定义实现，才能控制高度与图标垂直位置');
-assert(customTabBarWxml.includes('class="tab-bar__item'), '自定义底部导航必须保留可点击的 Tab 项');
-assert(customTabBarWxml.includes('<image'), 'Skyline 自定义底部导航必须使用普通 image 渲染图标');
-assert(!customTabBarWxml.includes('<cover-image'), 'Skyline 自定义底部导航不得继续使用真机兼容性不稳定的 cover-image');
-assert(!customTabBarWxml.includes('<cover-view'), 'Skyline 自定义底部导航不得继续使用真机兼容性不稳定的 cover-view');
-assert(customTabBarWxml.includes('mode="aspectFit"'), '底部导航图标必须保持原始宽高比');
-assert(!customTabBarWxml.includes('tab-bar__label'), '图标足以表达入口时，底部导航不得保留冗余文字');
-const customTabBarRootRule = customTabBarWxss.match(/\.tab-bar\s*\{([^}]*)\}/);
-assert(customTabBarRootRule, '自定义底部导航必须保留根容器样式');
-assert(/position:\s*absolute/.test(customTabBarRootRule[1]), 'Skyline 自定义底部导航必须使用 absolute 定位');
-assert(/pointer-events:\s*auto/.test(customTabBarRootRule[1]), 'Skyline 自定义底部导航必须显式恢复点击事件');
-assert(/height:\s*calc\(80rpx\s*\+\s*env\(safe-area-inset-bottom\)\)/.test(customTabBarRootRule[1]), 'Skyline 自定义底部导航必须显式声明主视觉区与安全区总高度');
-assert(/\.tab-bar__content\s*\{[^}]*height:\s*80rpx/.test(customTabBarWxss), '自定义底部导航主视觉区必须压缩为 80rpx');
-assert(/\.tab-bar__item\s*\{[^}]*align-items:\s*center[^}]*justify-content:\s*center/.test(customTabBarWxss), '底部导航图标必须在可视区域内居中');
+assert(!fs.existsSync(customTabBarPath), '恢复原生 TabBar 后不得残留 custom-tab-bar 目录');
+assert(!homepageJs.includes('getTabBar'), '首页不得再操作自定义 TabBar 实例');
+assert(!profileJs.includes('getTabBar'), '个人页不得再操作自定义 TabBar 实例');
+assert(/\.profile-page\s*\{[^}]*padding:\s*12rpx\s+32rpx\s+56rpx/.test(profileWxss), '原生底部导航会自动占位，个人页只应保留常规底部间距');
 
 const audioCreateOptions = [];
 let audioPlayCount = 0;

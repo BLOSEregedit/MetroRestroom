@@ -1,4 +1,4 @@
-.profile-page { min-height: 100vh; box-sizing: border-box; padding: 12rpx 32rpx calc(128rpx + env(safe-area-inset-bottom)); }
+.profile-page { min-height: 100vh; box-sizing: border-box; padding: 12rpx 32rpx 56rpx; }
 .section-title { margin: 28rpx 8rpx 18rpx; color: #777; font-size: 25rpx; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; }
 .clear-action { margin: 28rpx 8rpx 18rpx; color: #007aff; font-size: 24rpx; }

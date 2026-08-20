@@ -30,7 +30,6 @@
   },
   "requiredPrivateInfos": ["getLocation"],
   "tabBar": {
-    "custom": true,
     "color": "#8A8A8A",
     "selectedColor": "#007AFF",
     "backgroundColor": "#FFFFFF",
