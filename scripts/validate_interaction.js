@@ -542,8 +542,16 @@ const customTabBarWxss = fs.readFileSync(
 );
 assert.strictEqual(appConfig.tabBar.custom, true, '底部导航必须启用自定义实现，才能控制高度与图标垂直位置');
 assert(customTabBarWxml.includes('class="tab-bar__item'), '自定义底部导航必须保留可点击的 Tab 项');
-assert(customTabBarWxml.includes('<cover-image'), '真机底部导航必须使用 cover-image 渲染图标');
+assert(customTabBarWxml.includes('<image'), 'Skyline 自定义底部导航必须使用普通 image 渲染图标');
+assert(!customTabBarWxml.includes('<cover-image'), 'Skyline 自定义底部导航不得继续使用真机兼容性不稳定的 cover-image');
+assert(!customTabBarWxml.includes('<cover-view'), 'Skyline 自定义底部导航不得继续使用真机兼容性不稳定的 cover-view');
+assert(customTabBarWxml.includes('mode="aspectFit"'), '底部导航图标必须保持原始宽高比');
 assert(!customTabBarWxml.includes('tab-bar__label'), '图标足以表达入口时，底部导航不得保留冗余文字');
+const customTabBarRootRule = customTabBarWxss.match(/\.tab-bar\s*\{([^}]*)\}/);
+assert(customTabBarRootRule, '自定义底部导航必须保留根容器样式');
+assert(/position:\s*absolute/.test(customTabBarRootRule[1]), 'Skyline 自定义底部导航必须使用 absolute 定位');
+assert(/pointer-events:\s*auto/.test(customTabBarRootRule[1]), 'Skyline 自定义底部导航必须显式恢复点击事件');
+assert(/height:\s*calc\(80rpx\s*\+\s*env\(safe-area-inset-bottom\)\)/.test(customTabBarRootRule[1]), 'Skyline 自定义底部导航必须显式声明主视觉区与安全区总高度');
 assert(/\.tab-bar__content\s*\{[^}]*height:\s*80rpx/.test(customTabBarWxss), '自定义底部导航主视觉区必须压缩为 80rpx');
 assert(/\.tab-bar__item\s*\{[^}]*align-items:\s*center[^}]*justify-content:\s*center/.test(customTabBarWxss), '底部导航图标必须在可视区域内居中');
 
