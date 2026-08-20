@@ -1,5 +1,5 @@
 .tab-bar { position: fixed; z-index: 99; right: 0; bottom: 0; left: 0; box-sizing: border-box; border-top: 1rpx solid #ececec; background: #fff; padding-bottom: env(safe-area-inset-bottom); }
 .tab-bar__content { display: flex; height: 80rpx; align-items: center; justify-content: space-around; }
 .tab-bar__item { display: flex; width: 50%; height: 100%; align-items: center; justify-content: center; flex-direction: column; color: #8a8a8a; }
-.tab-bar__icon { width: 48rpx; height: 48rpx; }
+.tab-bar__icon { display: block; width: 48rpx; height: 48rpx; }
 .tab-bar__item--selected { color: #007aff; }
