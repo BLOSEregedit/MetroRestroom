@@ -62,20 +62,127 @@ function createPage(lineId, direction, stationName, originStationId) {
 const line2 = catalog.buildHomeView({ lineId: '2', direction: 'forward' });
 const peopleSquare = line2.stations.find((station) => station.name === '人民广场');
 const directionCase = createPage('2', 'forward', '南京东路', peopleSquare.id);
-const directionVisibleId = directionCase.page._visibleStationId();
 const directionOriginId = directionCase.page._state.originStationId;
-directionCase.page._refreshHomeView = (stationId) => {
+directionCase.page._wheelPosition = { value: directionCase.page.data.currentIndex + .5 };
+directionCase.page._wheelLastDirection = { value: 1 };
+directionCase.page._refreshHomeView = (stationId, options) => {
   directionCase.page._refreshedStationId = stationId;
+  directionCase.page._refreshOptions = options;
 };
 directionCase.page.onSwitchDirection();
 assert.strictEqual(directionCase.page._state.direction, 'reverse', '顶部方向按钮必须切换到反向');
 assert.strictEqual(directionCase.page._state.originStationId, directionOriginId, '方向切换不得修改起点');
 assert.strictEqual(
   directionCase.page._refreshedStationId,
-  directionVisibleId,
-  '方向切换必须保持当前浏览站',
+  directionCase.view.stations[directionCase.page.data.currentIndex + 1].id,
+  '两卡正中且向上滑时，方向切换必须锚定正在进入第二位的下方卡片',
+);
+assert.deepStrictEqual(
+  directionCase.page._refreshOptions.wheelRebase,
+  {
+    oldPosition: directionCase.page.data.currentIndex + .5,
+    oldAnchorIndex: directionCase.page.data.currentIndex + 1,
+  },
+  '方向切换必须携带当前连续位置，不得退回已吸附 currentIndex',
 );
 assert.strictEqual(directionCase.page._directionMode, 'manual', '方向切换后应进入手动方向模式');
+
+assert.strictEqual(
+  directionCase.page._getWheelCandidateIndex(0, .54, 10),
+  0,
+  '候选站在进入阈值前必须保持原站',
+);
+assert.strictEqual(
+  directionCase.page._getWheelCandidateIndex(0, .56, 10),
+  1,
+  '候选站越过 0.55 站距后必须进入下一站',
+);
+assert.strictEqual(
+  directionCase.page._getWheelCandidateIndex(1, .46, 10),
+  1,
+  '候选站进入下一站后，在 0.45—0.55 稳定带内不得跳回',
+);
+assert.strictEqual(
+  directionCase.page._getWheelCandidateIndex(1, .44, 10),
+  0,
+  '候选站退回 0.45 以下后必须恢复上一站',
+);
+assert.strictEqual(
+  directionCase.page._resolveWheelSnapTarget(.08, 0, 0, .4, 1, 10),
+  0,
+  '小于 0.10 站距的低速抖动必须回原站',
+);
+assert.strictEqual(
+  directionCase.page._resolveWheelSnapTarget(.52, 0, 0, 1.2, 1, 10),
+  1,
+  '临界稳定带内有明确向前速度时必须选择正在进入的站点',
+);
+assert.strictEqual(
+  directionCase.page._resolveWheelSnapTarget(.52, 0, 0, .4, 1, 10),
+  0,
+  '临界稳定带内接近静止时必须保持已有候选站',
+);
+assert.strictEqual(
+  directionCase.page._resolveWheelSnapTarget(.2, 0, 0, 4.5, 1, 10),
+  1,
+  '明确快甩但原生惯性未跨阈值时必须至少前进一站',
+);
+assert.strictEqual(
+  directionCase.page._getWheelAnchorIndex(4.5, 1, 4, 10),
+  5,
+  '两卡正中且列表向前移动时必须锚定进入焦点的下方卡片',
+);
+assert.strictEqual(
+  directionCase.page._getWheelAnchorIndex(4.5, -1, 5, 10),
+  4,
+  '两卡正中且列表向后移动时必须锚定进入焦点的上方卡片',
+);
+assert(
+  Math.abs(directionCase.page._getWheelRebasePosition(4.35, 4, 12, 20) - 12.35) < 1e-10,
+  '方向重映射必须保持锚点卡片相对第二位的屏幕偏移',
+);
+
+const snapLifecycleCase = createPage('2', 'forward', '南京东路', peopleSquare.id);
+snapLifecycleCase.page._wheelPhase = { value: 3 };
+snapLifecycleCase.page._wheelSnapping = { value: 1 };
+snapLifecycleCase.page.onWheelScrollStart({ detail: { isDrag: false } });
+assert.strictEqual(
+  snapLifecycleCase.page._wheelPhase.value,
+  3,
+  '程序化吸附产生的 scrollstart 不得清除 SNAPPING 状态',
+);
+assert.strictEqual(
+  snapLifecycleCase.page._wheelSnapping.value,
+  1,
+  '程序化吸附开始后必须继续锁定同一个吸附目标',
+);
+
+const snapFallbackCase = createPage('2', 'forward', '南京东路', peopleSquare.id);
+const fallbackTarget = snapFallbackCase.page.data.currentIndex + 1;
+snapFallbackCase.page.data.wheelSlotHeight = 100;
+snapFallbackCase.page._wheelFeedbackSession = 7;
+snapFallbackCase.page._wheelSettledSession = -1;
+snapFallbackCase.page._wheelPosition = { value: fallbackTarget - .2 };
+snapFallbackCase.page._wheelLastPosition = { value: fallbackTarget - .2 };
+snapFallbackCase.page._wheelSettledIndex = { value: fallbackTarget - 1 };
+snapFallbackCase.page._wheelCandidateIndex = { value: fallbackTarget };
+snapFallbackCase.page._wheelGestureStartPosition = { value: fallbackTarget - 1 };
+snapFallbackCase.page._wheelDetentIndex = { value: fallbackTarget - 1 };
+snapFallbackCase.page._wheelPhase = { value: 3 };
+snapFallbackCase.page._wheelSuppressDetents = { value: 0 };
+snapFallbackCase.page._wheelSnapping = { value: 1 };
+snapFallbackCase.page._wheelSnapTarget = { value: fallbackTarget };
+snapFallbackCase.page._wheelSnapAttempts = { value: 1 };
+snapFallbackCase.page._updateSyncStatus = () => {};
+snapFallbackCase.page._scheduleSyncForVisibleStation = () => {};
+snapFallbackCase.page.onWheelSnapFallback(fallbackTarget, 7);
+assert.strictEqual(snapFallbackCase.page._wheelSnapTarget.value, -1, '吸附兜底完成后必须清除旧目标');
+assert.strictEqual(snapFallbackCase.page._wheelSnapping.value, 0, '吸附兜底完成后必须退出吸附状态');
+assert.strictEqual(
+  snapFallbackCase.page.data.wheelScrollTop,
+  fallbackTarget * 100,
+  '吸附兜底必须把真实 scrollTop 收敛到目标站位',
+);
 
 ['3', '4'].forEach((targetLineId) => {
   const transferCase = createPage('1', 'forward', '上海火车站');
@@ -302,6 +409,9 @@ assert(homepageWxml.includes('worklet:onscrollupdate="onWheelScrollUpdate"'), '�
 assert(homepageWxml.includes('worklet:onscrollend="onWheelScrollEnd"'), '惯性结束后必须在 UI 线程吸附');
 assert(homepageWxml.includes('worklet:adjust-deceleration-velocity="adjustWheelDecelerationVelocity"'), '高速甩动必须保留原生速度惯性并限制极端速度');
 assert(homepageWxml.includes('horizontal-drag-gesture-handler'), '横滑换乘必须迁移到 Skyline 手势系统');
+assert(/<horizontal-drag-gesture-handler[^>]*tag="wheel-horizontal"[^>]*simultaneous-handlers="\{\{\['wheel-vertical'\]\}\}"[^>]*worklet:ongesture="onWheelHorizontalGesture"/.test(homepageWxml), '横滑换乘必须与纵向轮盘显式协商手势');
+assert(/<vertical-drag-gesture-handler[^>]*tag="wheel-vertical"[^>]*simultaneous-handlers="\{\{\['wheel-horizontal'\]\}\}"[^>]*native-view="scroll-view"/.test(homepageWxml), '纵向滚动代理必须按 scroll-view 实际方向配置');
+assert(!/<horizontal-drag-gesture-handler[^>]*native-view="scroll-view"/.test(homepageWxml), '横向识别器不得错误代理纵向 scroll-view');
 assert(!homepageWxml.includes('capture-bind:touchmove'), '逻辑层不得继续接收每一帧 touchmove');
 assert(homepageWxml.includes('id="station-card-{{index}}"'), '每张卡片必须暴露独立 Worklet 动画节点');
 assert(homepageWxml.includes('class="custom-nav"'), '自定义导航栏不得因 Skyline 迁移丢失');
@@ -312,6 +422,8 @@ assert(homepageWxml.includes('style="color: {{lineTextColor}};"'), '首页 ETA �
 assert(homepageWxml.includes('style="color: {{group.lineTextColor}};"'), '抽屉 ETA 必须使用厕所所属线路的可读文字色');
 assert(homepageWxml.includes('class="line-picker-pill'), '线路选择器必须使用胶囊结构');
 assert(homepageWxml.includes('background-color: {{line.color}};'), '线路选择器胶囊必须显示官方线路色标记');
+assert(homepageWxml.includes('class="line-picker-grid" list-item'), '线路选择弹层内容必须声明为 Skyline 列表项');
+assert(/wx:for="\{\{drawerGroups\}\}"[^>]*list-item/.test(homepageWxml), '厕所详情分组必须声明为 Skyline 列表项');
 assert(homepageWxml.includes('class="station-card-shell'), '卡片必须使用统一圆角阴影壳层');
 assert(homepageWxml.includes('当前计算起点'), '首页必须显式标注计算起点');
 assert(homepageWxml.includes('bindtap="onSelectTransferLine"'), '换乘线路胶囊必须可点击');
@@ -320,6 +432,9 @@ assert(homepageJs.includes('this.applyAnimatedStyle'), '卡片 transform 必须�
 assert(homepageJs.includes('getCardMotion(stationIndex - position.value'), '卡片尺寸必须只依赖连续虚拟焦点位置');
 assert(homepageJs.includes('runOnJS(this.onWheelDetents.bind(this))'), '跨站时必须仅把离散反馈事件送回逻辑层');
 assert(homepageJs.includes('scrollViewContext.scrollTo'), '惯性结束后必须在 UI 线程完成站点吸附');
+assert(homepageJs.includes('this._wheelSnapTarget.value = targetIndex'), '补间开始后必须锁定唯一吸附目标');
+assert(homepageJs.includes('this._wheelPhase.value !== WHEEL_PHASE_SNAPPING'), '程序化滚动不得误清除吸附阶段');
+assert(homepageJs.includes('wheelRebase'), '方向切换必须使用连续位置重映射而非离散索引复位');
 assert(homepageWxml.includes('wx:for="{{drawerGroups}}"'), '多厕所抽屉必须按线路分组');
 assert(homepageWxml.includes('信息有误？反馈'), '抽屉必须保留弱化反馈入口');
 assert(homepageWxml.includes('bindtap="onSetManualAnchor"'), '站点圆点必须可锁定手动起点');
@@ -338,6 +453,9 @@ assert(!/\.station-card-shell--active[^}]*width:/.test(homepageWxss), '焦点动
 assert(!/\.station-card-shell\s*\{[^}]*transition:/.test(homepageWxss), '视图层逐帧 transform 不得叠加 CSS transition');
 assert(!homepageWxss.includes('.station-focus-lens'), '样式中不得残留固定背景光场');
 assert(/\.line-picker-pill\s*\{[^}]*border-radius:\s*999rpx/.test(homepageWxss), '线路选择项必须使用胶囊样式');
+assert(/\.line-picker-list\s*\{[^}]*height:\s*55vh/.test(homepageWxss), '线路选择弹层列表必须具有明确高度');
+assert(/\.picker-list\s*\{[^}]*height:\s*55vh/.test(homepageWxss), '站点选择弹层列表必须具有明确高度');
+assert(/\.drawer-list\s*\{[^}]*height:\s*57vh/.test(homepageWxss), '厕所详情抽屉列表必须具有明确高度');
 assert(!homepageWxss.includes('0 0 30rpx rgba(85,181,190'), '焦点卡片不得使用会被轮盘裁成矩形的外扩背光');
 assert(!/\.eta-label\s*\{[^}]*color:/.test(homepageWxss), 'ETA 不得继续使用固定红色');
 assert(/\.home-content\s*\{[^}]*padding:\s*8rpx\s+28rpx\s+16rpx/.test(homepageWxss), '首页主体必须保留紧凑底部空间');

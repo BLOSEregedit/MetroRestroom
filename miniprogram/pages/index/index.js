@@ -36,7 +36,20 @@ const TRANSFER_SWIPE_PX = 48;
 const HORIZONTAL_GESTURE_RATIO = 1.2;
 const WHEEL_VISIBLE_SLOTS = 5;
 const WHEEL_BOTTOM_SPACER_SLOTS = 3;
-const WHEEL_SNAP_DURATION_MS = 180;
+const WHEEL_CANDIDATE_ENTER_DISTANCE = .55;
+const WHEEL_CANDIDATE_EXIT_DISTANCE = .45;
+const WHEEL_TOUCH_DEAD_DISTANCE = .1;
+const WHEEL_DIRECTION_SPEED = 1;
+const WHEEL_FLING_SPEED = 4;
+const WHEEL_SNAP_MIN_DURATION_MS = 140;
+const WHEEL_SNAP_MAX_DURATION_MS = 220;
+const WHEEL_SNAP_ERROR_DISTANCE = .01;
+const WHEEL_PHASE_IDLE = 0;
+const WHEEL_PHASE_DRAGGING = 1;
+const WHEEL_PHASE_DECELERATING = 2;
+const WHEEL_PHASE_SNAPPING = 3;
+const WHEEL_PHASE_RESETTING = 4;
+const WHEEL_PHASE_REBASING = 5;
 const RESTROOM_STATUS_LABELS = Object.freeze({
   maintenance: '维护中',
   closed: '暂不可用',
@@ -176,6 +189,7 @@ Page({
     });
     this._initializeWheelWorklet();
     this._wheelFeedbackSequence = 0;
+    this._wheelSettledSession = -1;
     this._unsubscribeSync = subscribeSyncState((event) => {
       if (!this._state || event.cityId !== SYNC_CITY_ID) return;
       this._updateSyncStatus();
@@ -244,6 +258,7 @@ Page({
     this._locationRequestToken += 1;
     if (this._syncTimer) clearTimeout(this._syncTimer);
     if (this._stationLayoutTimer) clearTimeout(this._stationLayoutTimer);
+    if (this._wheelSnapTimer) clearTimeout(this._wheelSnapTimer);
     this._clearStationAnimatedStyles();
     this._stopOperationalStatusClock();
     if (this._unsubscribeSync) this._unsubscribeSync();
@@ -279,6 +294,15 @@ Page({
     this._wheelDetentIndex = workletApi.shared(0);
     this._wheelSuppressDetents = workletApi.shared(1);
     this._wheelSnapping = workletApi.shared(0);
+    this._wheelPhase = workletApi.shared(WHEEL_PHASE_RESETTING);
+    this._wheelSettledIndex = workletApi.shared(0);
+    this._wheelCandidateIndex = workletApi.shared(0);
+    this._wheelGestureStartPosition = workletApi.shared(0);
+    this._wheelLastPosition = workletApi.shared(0);
+    this._wheelLastDirection = workletApi.shared(0);
+    this._wheelReleaseVelocity = workletApi.shared(0);
+    this._wheelSnapTarget = workletApi.shared(-1);
+    this._wheelSnapAttempts = workletApi.shared(0);
     this._wheelSession = workletApi.shared(0);
     this._wheelSequence = workletApi.shared(0);
     this._wheelScrollRef = workletApi.shared();
@@ -329,18 +353,125 @@ Page({
     }).exec();
   },
 
-  _resetWheelWorklet(currentIndex, maxIndex, slotHeight) {
+  _getWheelCandidateIndex(currentCandidate, position, maxIndex) {
+    'worklet';
+    const maximum = Math.max(0, Number(maxIndex) || 0);
+    const candidate = clamp(Math.round(Number(currentCandidate) || 0), 0, maximum);
+    const nextPosition = clamp(Number(position) || 0, 0, maximum);
+    if (nextPosition >= candidate + WHEEL_CANDIDATE_ENTER_DISTANCE) {
+      return clamp(
+        Math.floor(nextPosition + WHEEL_CANDIDATE_EXIT_DISTANCE),
+        candidate,
+        maximum,
+      );
+    }
+    if (nextPosition <= candidate - WHEEL_CANDIDATE_ENTER_DISTANCE) {
+      return clamp(
+        Math.ceil(nextPosition - WHEEL_CANDIDATE_EXIT_DISTANCE),
+        0,
+        candidate,
+      );
+    }
+    return candidate;
+  },
+
+  _resolveWheelSnapTarget(position, candidateIndex, gestureStartPosition,
+    releaseVelocity, lastDirection, maxIndex) {
+    'worklet';
+    const maximum = Math.max(0, Number(maxIndex) || 0);
+    const nextPosition = clamp(Number(position) || 0, 0, maximum);
+    const startPosition = clamp(Number(gestureStartPosition) || 0, 0, maximum);
+    const velocity = Number(releaseVelocity) || 0;
+    const velocityDirection = velocity > 0 ? 1 : (velocity < 0 ? -1 : 0);
+    const direction = velocityDirection || (lastDirection > 0 ? 1 : (lastDirection < 0 ? -1 : 0));
+    const startIndex = clamp(Math.round(startPosition), 0, maximum);
+    let targetIndex = clamp(Math.round(Number(candidateIndex) || 0), 0, maximum);
+
+    if (Math.abs(nextPosition - startPosition) < WHEEL_TOUCH_DEAD_DISTANCE
+      && Math.abs(velocity) < WHEEL_DIRECTION_SPEED) {
+      return startIndex;
+    }
+
+    const lowerIndex = Math.floor(nextPosition);
+    const fraction = nextPosition - lowerIndex;
+    if (fraction >= WHEEL_CANDIDATE_EXIT_DISTANCE
+      && fraction <= WHEEL_CANDIDATE_ENTER_DISTANCE
+      && Math.abs(velocity) >= WHEEL_DIRECTION_SPEED
+      && direction) {
+      targetIndex = direction > 0 ? Math.ceil(nextPosition) : lowerIndex;
+    }
+
+    if (Math.abs(velocity) >= WHEEL_FLING_SPEED && targetIndex === startIndex && direction) {
+      targetIndex = startIndex + direction;
+    }
+    return clamp(targetIndex, 0, maximum);
+  },
+
+  _getWheelAnchorIndex(position, lastDirection, settledIndex, maxIndex) {
+    'worklet';
+    const maximum = Math.max(0, Number(maxIndex) || 0);
+    const nextPosition = clamp(Number(position) || 0, 0, maximum);
+    const lowerIndex = Math.floor(nextPosition);
+    const fraction = nextPosition - lowerIndex;
+    if (Math.abs(fraction - .5) < .0001) {
+      if (lastDirection > 0) return clamp(lowerIndex + 1, 0, maximum);
+      if (lastDirection < 0) return clamp(lowerIndex, 0, maximum);
+      const settled = clamp(Math.round(Number(settledIndex) || 0), 0, maximum);
+      if (settled === lowerIndex || settled === lowerIndex + 1) return settled;
+    }
+    return clamp(Math.round(nextPosition), 0, maximum);
+  },
+
+  _getWheelRebasePosition(oldPosition, oldAnchorIndex, newAnchorIndex, maxIndex) {
+    'worklet';
+    const maximum = Math.max(0, Number(maxIndex) || 0);
+    const position = Number(oldPosition) || 0;
+    const oldAnchor = Number(oldAnchorIndex) || 0;
+    const newAnchor = Number(newAnchorIndex) || 0;
+    return clamp(newAnchor + position - oldAnchor, 0, maximum);
+  },
+
+  _getWheelSnapDuration(position, targetIndex) {
+    'worklet';
+    const distance = Math.abs((Number(position) || 0) - (Number(targetIndex) || 0));
+    return Math.round(clamp(
+      WHEEL_SNAP_MIN_DURATION_MS + (distance * 80),
+      WHEEL_SNAP_MIN_DURATION_MS,
+      WHEEL_SNAP_MAX_DURATION_MS,
+    ));
+  },
+
+  _resetWheelWorklet(currentIndex, maxIndex, slotHeight, options) {
     if (!this._wheelPosition) return;
+    const settings = options || {};
+    const position = clamp(
+      Number.isFinite(Number(settings.position)) ? Number(settings.position) : currentIndex,
+      0,
+      maxIndex,
+    );
+    const phase = settings.phase === WHEEL_PHASE_REBASING
+      ? WHEEL_PHASE_REBASING
+      : WHEEL_PHASE_RESETTING;
     const nextSession = (Number(this._wheelSessionId) || 0) + 1;
     this._wheelSessionId = nextSession;
     this._wheelFeedbackSession = nextSession;
     this._wheelFeedbackSequence = 0;
-    this._wheelPosition.value = currentIndex;
+    this._wheelSettledSession = -1;
+    this._wheelPosition.value = position;
     this._wheelSlotHeight.value = slotHeight;
     this._wheelMaxIndex.value = maxIndex;
-    this._wheelDetentIndex.value = currentIndex;
+    this._wheelDetentIndex.value = clamp(Math.round(position), 0, maxIndex);
     this._wheelSuppressDetents.value = 1;
     this._wheelSnapping.value = 0;
+    this._wheelPhase.value = phase;
+    this._wheelSettledIndex.value = currentIndex;
+    this._wheelCandidateIndex.value = this._getWheelCandidateIndex(currentIndex, position, maxIndex);
+    this._wheelGestureStartPosition.value = position;
+    this._wheelLastPosition.value = position;
+    this._wheelLastDirection.value = 0;
+    this._wheelReleaseVelocity.value = 0;
+    this._wheelSnapTarget.value = -1;
+    this._wheelSnapAttempts.value = 0;
     this._wheelSession.value = nextSession;
     this._wheelSequence.value = 0;
     if (this._feedback) this._feedback.reset();
@@ -411,6 +542,21 @@ Page({
     const currentIndex = preferredIndex >= 0
       ? preferredIndex
       : Math.min(Math.max(homeView.currentIndex || 0, 0), Math.max(rawStations.length - 1, 0));
+    const maxIndex = Math.max(rawStations.length - 1, 0);
+    const wheelRebase = options && options.wheelRebase;
+    const canRebaseWheel = wheelRebase
+      && preferredIndex >= 0
+      && Number.isFinite(Number(wheelRebase.oldPosition))
+      && Number.isFinite(Number(wheelRebase.oldAnchorIndex))
+      && Number(this.data.wheelSlotHeight) > 0;
+    const rebasedPosition = canRebaseWheel
+      ? this._getWheelRebasePosition(
+        Number(wheelRebase.oldPosition),
+        Number(wheelRebase.oldAnchorIndex),
+        currentIndex,
+        maxIndex,
+      )
+      : currentIndex;
 
     this._homeView = homeView;
     this._rawStations = rawStations;
@@ -421,7 +567,7 @@ Page({
     const routeOptions = lineOption.routes || [];
 
     const lineColor = getLineColor(homeView.line);
-    this.setData({
+    const patch = {
       lineId: this._state.lineId,
       lineName: getLineName(homeView.line, this._state.lineId),
       lineColor,
@@ -434,7 +580,20 @@ Page({
       showRouteSelector: lineOption.type === 'branched' && routeOptions.length > 1,
       currentIndex,
       stations: this._decorateStations(rawStations, currentIndex, lineColor),
-    }, () => {
+    };
+    if (canRebaseWheel) {
+      const slotHeight = Number(this.data.wheelSlotHeight);
+      patch.wheelScrollTop = rebasedPosition * slotHeight;
+      this._resetWheelWorklet(currentIndex, maxIndex, slotHeight, {
+        position: rebasedPosition,
+        phase: WHEEL_PHASE_REBASING,
+      });
+    }
+    this.setData(patch, () => {
+      if (canRebaseWheel) {
+        this._bindStationAnimatedStyles(rawStations.length);
+        return;
+      }
       this._scheduleStationWheelLayout();
     });
     this._updateSyncStatus();
@@ -454,7 +613,7 @@ Page({
         const slotHeight = rect.height / WHEEL_VISIBLE_SLOTS;
         const maxIndex = Math.max((this._rawStations || []).length - 1, 0);
         const currentIndex = clamp(this.data.currentIndex, 0, maxIndex);
-        this._resetWheelWorklet(currentIndex, maxIndex, slotHeight);
+        this._resetWheelWorklet(currentIndex, maxIndex, slotHeight, { position: currentIndex });
         this.setData({
           wheelSlotHeight: slotHeight,
           wheelTopSpacerHeight: slotHeight,
@@ -643,8 +802,69 @@ Page({
 
   onWheelDragStart() {
     if (!this._wheelSuppressDetents) return;
+    if (this._wheelPhase.value !== WHEEL_PHASE_DRAGGING) {
+      const session = (Number(this._wheelSession.value) || 0) + 1;
+      const position = this._wheelPosition.value;
+      const maximum = this._wheelMaxIndex.value;
+      const settledIndex = clamp(Math.round(this._wheelSettledIndex.value), 0, maximum);
+      this._wheelSession.value = session;
+      this._wheelSequence.value = 0;
+      this._wheelPhase.value = WHEEL_PHASE_DRAGGING;
+      this._wheelCandidateIndex.value = this._getWheelCandidateIndex(
+        settledIndex,
+        position,
+        maximum,
+      );
+      this._wheelGestureStartPosition.value = position;
+      this._wheelLastPosition.value = position;
+      this._wheelLastDirection.value = 0;
+      this._wheelReleaseVelocity.value = 0;
+      this._wheelSnapTarget.value = -1;
+      this._wheelSnapAttempts.value = 0;
+      this.onWheelCycleStart(session);
+    }
     this._wheelSuppressDetents.value = 0;
     this._wheelSnapping.value = 0;
+  },
+
+  _beginWheelCycleOnUI() {
+    'worklet';
+    if (this._wheelPhase.value === WHEEL_PHASE_DRAGGING) return;
+    const session = this._wheelSession.value + 1;
+    const position = this._wheelPosition.value;
+    const maximum = this._wheelMaxIndex.value;
+    const settledIndex = clamp(Math.round(this._wheelSettledIndex.value), 0, maximum);
+    this._wheelSession.value = session;
+    this._wheelSequence.value = 0;
+    this._wheelPhase.value = WHEEL_PHASE_DRAGGING;
+    this._wheelCandidateIndex.value = this._getWheelCandidateIndex(
+      settledIndex,
+      position,
+      maximum,
+    );
+    this._wheelGestureStartPosition.value = position;
+    this._wheelLastPosition.value = position;
+    this._wheelLastDirection.value = 0;
+    this._wheelReleaseVelocity.value = 0;
+    this._wheelSnapTarget.value = -1;
+    this._wheelSnapAttempts.value = 0;
+    this._wheelSuppressDetents.value = 0;
+    this._wheelSnapping.value = 0;
+    runOnJS(this.onWheelCycleStart.bind(this))(session);
+  },
+
+  onWheelCycleStart(session) {
+    const nextSession = Number(session) || 0;
+    if (nextSession < Number(this._wheelFeedbackSession)) return;
+    if (this._wheelSnapTimer) {
+      clearTimeout(this._wheelSnapTimer);
+      this._wheelSnapTimer = null;
+    }
+    this._wheelSessionId = Math.max(Number(this._wheelSessionId) || 0, nextSession);
+    this._wheelFeedbackSession = nextSession;
+    this._wheelFeedbackSequence = 0;
+    this._wheelSettledSession = -1;
+    if (this._feedback) this._feedback.reset();
   },
 
   _applyWheelPosition(position) {
@@ -674,49 +894,126 @@ Page({
 
   onWheelScrollStart(event) {
     'worklet';
-    this._wheelSnapping.value = 0;
-    if (event && event.detail && event.detail.isDrag) this._wheelSuppressDetents.value = 0;
+    const isDrag = Boolean(event && event.detail && event.detail.isDrag);
+    if (isDrag) {
+      this._beginWheelCycleOnUI();
+      return;
+    }
+    if (this._wheelPhase.value !== WHEEL_PHASE_SNAPPING
+      && this._wheelPhase.value !== WHEEL_PHASE_RESETTING
+      && this._wheelPhase.value !== WHEEL_PHASE_REBASING) {
+      this._wheelPhase.value = WHEEL_PHASE_DECELERATING;
+    }
   },
 
   onWheelScrollUpdate(event) {
     'worklet';
     const slotHeight = Math.max(1, this._wheelSlotHeight.value);
-    this._applyWheelPosition(event.detail.scrollTop / slotHeight);
+    const isDrag = Boolean(event && event.detail && event.detail.isDrag);
+    if (isDrag && this._wheelPhase.value !== WHEEL_PHASE_DRAGGING) {
+      this._beginWheelCycleOnUI();
+    } else if (!isDrag && this._wheelPhase.value === WHEEL_PHASE_DRAGGING) {
+      this._wheelPhase.value = WHEEL_PHASE_DECELERATING;
+    }
+    const previousPosition = this._wheelPosition.value;
+    const nextPosition = clamp(event.detail.scrollTop / slotHeight, 0, this._wheelMaxIndex.value);
+    const delta = nextPosition - previousPosition;
+    if (Math.abs(delta) > .0001) this._wheelLastDirection.value = delta > 0 ? 1 : -1;
+    this._wheelLastPosition.value = nextPosition;
+    this._applyWheelPosition(nextPosition);
+    this._wheelCandidateIndex.value = this._getWheelCandidateIndex(
+      this._wheelCandidateIndex.value,
+      nextPosition,
+      this._wheelMaxIndex.value,
+    );
   },
 
   adjustWheelDecelerationVelocity(velocity) {
     'worklet';
-    return clampWheelVelocity(velocity, this._wheelSlotHeight.value);
+    const adjustedVelocity = clampWheelVelocity(velocity, this._wheelSlotHeight.value);
+    const slotHeight = Math.max(1, this._wheelSlotHeight.value);
+    this._wheelReleaseVelocity.value = adjustedVelocity / slotHeight;
+    if (Math.abs(adjustedVelocity) > .01) {
+      this._wheelLastDirection.value = adjustedVelocity > 0 ? 1 : -1;
+    }
+    if (this._wheelPhase.value === WHEEL_PHASE_DRAGGING) {
+      this._wheelPhase.value = WHEEL_PHASE_DECELERATING;
+    }
+    return adjustedVelocity;
   },
 
-  onWheelScrollEnd() {
+  onWheelScrollEnd(event) {
     'worklet';
-    if (this._wheelSuppressDetents.value) return;
+    const phase = this._wheelPhase.value;
+    if (phase === WHEEL_PHASE_RESETTING || phase === WHEEL_PHASE_REBASING) {
+      this._wheelPhase.value = WHEEL_PHASE_IDLE;
+      this._wheelSnapping.value = 0;
+      return;
+    }
+
+    const slotHeight = Math.max(1, this._wheelSlotHeight.value);
+    const eventScrollTop = event && event.detail && event.detail.scrollTop;
+    if (typeof eventScrollTop === 'number') {
+      const eventPosition = clamp(eventScrollTop / slotHeight, 0, this._wheelMaxIndex.value);
+      this._wheelLastPosition.value = eventPosition;
+      this._applyWheelPosition(eventPosition);
+      this._wheelCandidateIndex.value = this._getWheelCandidateIndex(
+        this._wheelCandidateIndex.value,
+        eventPosition,
+        this._wheelMaxIndex.value,
+      );
+    }
 
     const position = this._wheelPosition.value;
-    const targetIndex = clamp(
-      Math.round(position),
-      0,
-      this._wheelMaxIndex.value,
-    );
+    const targetIndex = phase === WHEEL_PHASE_SNAPPING
+      ? clamp(Math.round(this._wheelSnapTarget.value), 0, this._wheelMaxIndex.value)
+      : this._resolveWheelSnapTarget(
+        position,
+        this._wheelCandidateIndex.value,
+        this._wheelGestureStartPosition.value,
+        this._wheelReleaseVelocity.value,
+        this._wheelLastDirection.value,
+        this._wheelMaxIndex.value,
+      );
     const session = this._wheelSession.value;
     const finish = this.onWheelSettled.bind(this);
+    const distance = Math.abs(position - targetIndex);
 
-    if (this._wheelSnapping.value || Math.abs(position - targetIndex) < 0.002) {
+    if (distance <= WHEEL_SNAP_ERROR_DISTANCE) {
       this._wheelSnapping.value = 0;
       this._applyWheelPosition(targetIndex);
+      this._wheelPhase.value = WHEEL_PHASE_IDLE;
+      this._wheelSettledIndex.value = targetIndex;
+      this._wheelCandidateIndex.value = targetIndex;
+      this._wheelGestureStartPosition.value = targetIndex;
+      this._wheelSnapTarget.value = -1;
+      this._wheelSnapAttempts.value = 0;
       runOnJS(finish)(targetIndex, session);
       return;
     }
 
+    if (phase === WHEEL_PHASE_SNAPPING && this._wheelSnapAttempts.value >= 1) {
+      this._applyWheelPosition(targetIndex);
+      this._wheelPhase.value = WHEEL_PHASE_RESETTING;
+      this._wheelSuppressDetents.value = 1;
+      this._wheelSnapping.value = 0;
+      runOnJS(this.onWheelSnapFallback.bind(this))(targetIndex, session);
+      return;
+    }
+
+    const duration = this._getWheelSnapDuration(position, targetIndex);
     this._wheelSnapping.value = 1;
+    this._wheelPhase.value = WHEEL_PHASE_SNAPPING;
+    this._wheelSnapTarget.value = targetIndex;
+    if (phase === WHEEL_PHASE_SNAPPING) this._wheelSnapAttempts.value += 1;
     if (scrollViewContext && this._wheelScrollRef.value) {
       scrollViewContext.scrollTo(this._wheelScrollRef.value, {
-        top: targetIndex * this._wheelSlotHeight.value,
-        duration: WHEEL_SNAP_DURATION_MS,
+        top: targetIndex * slotHeight,
+        duration,
         animated: true,
         easingFunction: 'ease-out',
       });
+      runOnJS(this.onWheelSnapStarted.bind(this))(targetIndex, session, duration);
       return;
     }
 
@@ -724,7 +1021,49 @@ Page({
     runOnJS(this.onWheelSnapFallback.bind(this))(targetIndex, session);
   },
 
+  onWheelSnapStarted(targetIndex, session, duration) {
+    if (Number(session) !== Number(this._wheelFeedbackSession)) return;
+    if (this._wheelSnapTimer) clearTimeout(this._wheelSnapTimer);
+    this._wheelSnapTimer = setTimeout(() => {
+      this._wheelSnapTimer = null;
+      if (Number(session) !== Number(this._wheelFeedbackSession)) return;
+      if (!this._wheelPhase || this._wheelPhase.value !== WHEEL_PHASE_SNAPPING) return;
+      if (Math.round(this._wheelSnapTarget.value) !== Math.round(targetIndex)) return;
+      this._wheelPosition.value = targetIndex;
+      this._wheelLastPosition.value = targetIndex;
+      this._wheelSettledIndex.value = targetIndex;
+      this._wheelCandidateIndex.value = targetIndex;
+      this._wheelGestureStartPosition.value = targetIndex;
+      this._wheelDetentIndex.value = targetIndex;
+      this._wheelPhase.value = WHEEL_PHASE_RESETTING;
+      this._wheelSuppressDetents.value = 1;
+      this._wheelSnapping.value = 0;
+      this._wheelSnapTarget.value = -1;
+      this._wheelSnapAttempts.value = 0;
+      this.setData({ wheelScrollTop: targetIndex * this.data.wheelSlotHeight });
+      this.onWheelSettled(targetIndex, session);
+    }, Math.max(0, Number(duration) || 0) + 100);
+  },
+
   onWheelSnapFallback(targetIndex, session) {
+    if (Number(session) !== Number(this._wheelFeedbackSession)) return;
+    if (this._wheelSnapTimer) {
+      clearTimeout(this._wheelSnapTimer);
+      this._wheelSnapTimer = null;
+    }
+    if (this._wheelPosition) {
+      this._wheelPosition.value = targetIndex;
+      this._wheelLastPosition.value = targetIndex;
+      this._wheelSettledIndex.value = targetIndex;
+      this._wheelCandidateIndex.value = targetIndex;
+      this._wheelGestureStartPosition.value = targetIndex;
+      this._wheelDetentIndex.value = targetIndex;
+      this._wheelPhase.value = WHEEL_PHASE_RESETTING;
+      this._wheelSuppressDetents.value = 1;
+      this._wheelSnapping.value = 0;
+      this._wheelSnapTarget.value = -1;
+      this._wheelSnapAttempts.value = 0;
+    }
     this.setData({
       wheelScrollTop: targetIndex * this.data.wheelSlotHeight,
     });
@@ -740,6 +1079,12 @@ Page({
 
   onWheelSettled(rawIndex, session) {
     if (session !== undefined && Number(session) !== Number(this._wheelFeedbackSession)) return;
+    if (session !== undefined && Number(session) === Number(this._wheelSettledSession)) return;
+    if (this._wheelSnapTimer) {
+      clearTimeout(this._wheelSnapTimer);
+      this._wheelSnapTimer = null;
+    }
+    if (session !== undefined) this._wheelSettledSession = Number(session);
     const parsedIndex = Number(rawIndex);
     const currentIndex = Math.min(
       Math.max(Number.isFinite(parsedIndex) ? parsedIndex : this.data.currentIndex, 0),
@@ -1026,7 +1371,21 @@ Page({
   },
 
   onSwitchDirection() {
-    const visibleStationId = this._visibleStationId();
+    const maximum = Math.max((this._rawStations || []).length - 1, 0);
+    const position = this._wheelPosition
+      ? clamp(Number(this._wheelPosition.value) || 0, 0, maximum)
+      : clamp(Number(this.data.currentIndex) || 0, 0, maximum);
+    const lastDirection = this._wheelLastDirection
+      ? Number(this._wheelLastDirection.value) || 0
+      : 0;
+    const anchorIndex = this._getWheelAnchorIndex(
+      position,
+      lastDirection,
+      this.data.currentIndex,
+      maximum,
+    );
+    const anchorStation = (this._rawStations || [])[anchorIndex];
+    const visibleStationId = anchorStation ? anchorStation.id : this._visibleStationId();
     const lineOption = this.data.lineOptions.find((item) => item.id === this._state.lineId) || {};
     const directions = this._getDirectionOptions(lineOption, this._state.routeId);
     const directionIndex = directions.findIndex((item) => item.id === this._state.direction);
@@ -1039,9 +1398,31 @@ Page({
     }
 
     this._cancelPendingLocation();
+    if (this._wheelSnapTimer) {
+      clearTimeout(this._wheelSnapTimer);
+      this._wheelSnapTimer = null;
+    }
+    if (this._wheelPhase) {
+      const rebaseSession = (Number(this._wheelSession.value) || 0) + 1;
+      this._wheelSession.value = rebaseSession;
+      this._wheelSessionId = Math.max(Number(this._wheelSessionId) || 0, rebaseSession);
+      this._wheelFeedbackSession = rebaseSession;
+      this._wheelFeedbackSequence = 0;
+      this._wheelSettledSession = -1;
+      this._wheelPhase.value = WHEEL_PHASE_REBASING;
+      this._wheelSuppressDetents.value = 1;
+      this._wheelSnapping.value = 0;
+      this._wheelSnapTarget.value = -1;
+      this._wheelSnapAttempts.value = 0;
+    }
     this._state.direction = nextDirection.id;
     this._directionMode = 'manual';
-    this._refreshHomeView(visibleStationId);
+    this._refreshHomeView(visibleStationId, {
+      wheelRebase: {
+        oldPosition: position,
+        oldAnchorIndex: anchorIndex,
+      },
+    });
     this._saveCurrentPreferences({ directionMode: 'manual' });
   },
 
