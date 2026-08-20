@@ -2,27 +2,34 @@
 <view class="page">
   <view class="control-card">
     <view class="control-row control-row--first">
-      <text class="city-name">{{cityName}}</text>
+      <view class="city-control" role="button" aria-label="当前城市{{cityName}}，点击选择城市" bindtap="onOpenCityPicker">
+        <text>{{cityName}}</text>
+      </view>
       <view class="line-control" bindtap="onOpenLinePicker" style="border-color: {{lineColor}}; color: {{lineTextColor}};">
         <text>{{lineName}}</text><text class="control-chevron">⌄</text>
       </view>
     </view>
     <view class="control-row control-row--second">
-      <view class="origin-control" bindtap="onOpenStationPicker">
-        <view class="origin-control__label"><text class="origin-caption">当前计算起点</text><text class="origin-change">更换</text></view>
-        <text class="origin-name">{{originStationName}}</text>
+      <view class="origin-control">
+        <view class="origin-name-control" role="button" aria-label="当前计算起点{{originStationName}}，点击选择站点" bindtap="onOpenStationPicker">
+          <text class="origin-name">{{originStationName}}</text>
+        </view>
+        <text class="origin-separator">·</text>
+        <view wx:if="{{isManualAnchor && locationStatus === 'locating'}}" class="origin-mode origin-mode--locating">
+          <text>自选起点</text><text class="origin-mode__action">｜定位中…</text>
+        </view>
+        <view wx:elif="{{isManualAnchor}}" class="origin-mode origin-mode--manual" role="button" aria-label="当前为自选起点，点击恢复定位" bindtap="onRestoreSmartLocation">
+          <text>自选起点</text><text class="origin-mode__action">｜恢复定位</text>
+        </view>
+        <view wx:elif="{{showLocationAction}}" class="origin-mode origin-mode--{{locationStatus}}" role="button" aria-label="{{locationLabel}}，{{locationActionLabel}}" bindtap="onLocationAction">
+          <text>{{locationLabel}}</text><text class="origin-mode__action">｜{{locationActionLabel}}</text>
+        </view>
+        <view wx:else class="origin-mode origin-mode--{{locationStatus}}">
+          <text>{{locationLabel}}</text>
+        </view>
       </view>
       <view class="direction-control" bindtap="onSwitchDirection">
         <text class="direction-label">{{directionLabel}}</text><text class="direction-switch">⇄</text>
-      </view>
-    </view>
-    <view class="control-row control-row--mode">
-      <view wx:if="{{isManualAnchor}}" class="mode-control mode-control--manual" bindtap="onRestoreSmartLocation">
-        <text>手动锚点</text><text class="mode-action">恢复智能定位</text>
-      </view>
-      <view wx:else class="mode-control mode-control--{{locationStatus}}" bindtap="onLocationAction">
-        <text class="mode-dot"></text><text>{{locationLabel}}</text>
-        <text wx:if="{{showLocationAction}}" class="mode-action">{{locationActionLabel}}</text>
       </view>
     </view>
     <scroll-view wx:if="{{showRouteSelector}}" class="route-selector" scroll-x enhanced show-scrollbar="{{false}}">
@@ -35,8 +42,8 @@
   </view>
 
   <view class="sync-bar sync-bar--{{syncTone}}">
-    <view class="sync-bar__status"><text class="sync-bar__dot"></text><text>{{syncMessage}}</text></view>
-    <button class="sync-bar__action" disabled="{{syncPhase === 'checking'}}" bindtap="onRefreshSync">检查更新</button>
+    <view class="sync-bar__status"><text class="sync-bar__dot"></text><text class="sync-bar__message">{{syncMessage}}</text></view>
+    <button class="sync-bar__action" aria-label="{{syncActionLabel}}数据" disabled="{{syncPhase === 'checking'}}" bindtap="onRefreshSync"><view class="sync-action__icon {{syncPhase === 'checking' ? 'sync-action__icon--spinning' : ''}}"></view><text>{{syncActionLabel}}</text></button>
   </view>
 
   <view class="wheel-heading"><text>沿线路浏览</text><text class="wheel-tip">点圆点锁定起点</text></view>
@@ -91,13 +98,19 @@
     </swiper>
   </view>
 
+  <view wx:if="{{showCityPicker}}" class="overlay" bindtap="onCloseCityPicker">
+    <view class="picker-sheet city-picker-sheet" catchtap="onStopPropagation"><view class="sheet-handle"></view><view class="sheet-title">选择城市</view>
+      <view class="city-picker-item" role="button" aria-label="上海，当前城市" bindtap="onSelectCity"><text class="city-picker-name">上海</text><text class="city-picker-current">当前城市</text></view>
+      <text class="city-picker-note">更多城市陆续开放</text>
+    </view>
+  </view>
   <view wx:if="{{showLinePicker}}" class="overlay" bindtap="onCloseLinePicker">
     <view class="picker-sheet" catchtap="onStopPropagation"><view class="sheet-handle"></view><view class="sheet-title">选择浏览线路</view>
       <scroll-view class="line-picker-list" scroll-y><view class="line-picker-grid"><view wx:for="{{lineOptions}}" wx:for-item="line" wx:key="id" class="line-picker-pill {{line.id === lineId ? 'line-picker-pill--selected' : ''}}" data-line-id="{{line.id}}" bindtap="onSelectLine" style="border-color: {{line.color}}; color: {{line.textColor}};"><text class="line-picker-pill__mark" style="background-color: {{line.color}};"></text><text class="line-picker-pill__name">{{line.name}}</text><text wx:if="{{line.id === lineId}}" class="line-picker-pill__current">当前</text></view></view></scroll-view>
     </view>
   </view>
   <view wx:if="{{showStationPicker}}" class="overlay" bindtap="onCloseStationPicker">
-    <view class="picker-sheet" catchtap="onStopPropagation"><view class="sheet-handle"></view><view class="sheet-title">选择计算起点</view>
+    <view class="picker-sheet" catchtap="onStopPropagation"><view class="sheet-handle"></view><view class="sheet-title">选择计算起点</view><text class="sheet-subtitle">选择后将切换为自选起点</text>
       <scroll-view class="picker-list" scroll-y><view wx:for="{{stations}}" wx:for-item="station" wx:key="id" class="picker-item {{station.id === originStationId ? 'picker-item--selected' : ''}}" data-station-id="{{station.id}}" bindtap="onSelectOriginStation"><text>{{station.name}}</text><text wx:if="{{station.id === originStationId}}" class="selected-mark">✓</text></view></scroll-view>
     </view>
   </view>

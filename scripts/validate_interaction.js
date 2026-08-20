@@ -37,7 +37,9 @@ function createPage(lineId, direction, stationName, originStationId) {
     lineTextColor: page._getReadableLineColor(view.line.color),
     lineName: view.line.name,
     lineOptions: catalog.getLineOptions(),
+    showCityPicker: false,
     showRestroomDrawer: false,
+    syncTone: 'blue',
     stations: view.stations,
   };
   page._state = {
@@ -143,12 +145,63 @@ assert.strictEqual(
 );
 assert.strictEqual(manualAnchorCase.page._savedPreferences.originMode, 'manual');
 
+let restoreLocationCalls = 0;
+manualAnchorCase.page.onRequestLocation = () => { restoreLocationCalls += 1; };
+manualAnchorCase.page.onRestoreSmartLocation();
+assert.strictEqual(restoreLocationCalls, 1, '恢复定位入口必须重新请求系统定位');
+assert.strictEqual(
+  manualAnchorCase.page.data.isManualAnchor,
+  true,
+  '定位成功前必须继续保留自选起点状态',
+);
+
 const invalidAnchorOrigin = manualAnchorCase.page._state.originStationId;
 manualAnchorCase.page.onSetManualAnchor({ currentTarget: { dataset: { stationId: 'missing' } } });
 assert.strictEqual(
   manualAnchorCase.page._state.originStationId,
   invalidAnchorOrigin,
   '不存在的圆点站点不得改变起点',
+);
+
+const cityPickerCase = createPage('2', 'forward', '人民广场', peopleSquare.id);
+cityPickerCase.page.onOpenCityPicker();
+assert.strictEqual(cityPickerCase.page.data.showCityPicker, true, '点击城市胶囊必须打开城市面板');
+cityPickerCase.page.onSelectCity();
+assert.strictEqual(cityPickerCase.page.data.showCityPicker, false, '选择当前城市后必须关闭城市面板');
+
+const syncPresentationCase = createPage('2', 'forward', '人民广场', peopleSquare.id);
+const syncNow = Date.UTC(2026, 7, 20, 6, 30);
+const syncedPresentation = syncPresentationCase.page._buildHomeSyncPresentation({
+  phase: 'success', tone: 'green', lastAlignedAt: syncNow,
+}, syncNow);
+assert.deepStrictEqual(syncedPresentation, {
+  tone: 'green', message: '已同步 · 08-20 14:30', actionLabel: '更新',
+});
+syncPresentationCase.page.data.syncTone = 'green';
+const checkingPresentation = syncPresentationCase.page._buildHomeSyncPresentation({
+  phase: 'checking', tone: 'orange', lastAlignedAt: syncNow,
+}, syncNow);
+assert.strictEqual(checkingPresentation.tone, 'green', '检查期间必须保留请求前的新鲜度圆点');
+assert.strictEqual(checkingPresentation.actionLabel, '更新中');
+const failedPresentation = syncPresentationCase.page._buildHomeSyncPresentation({
+  phase: 'failed', tone: 'gray', lastAlignedAt: syncNow,
+}, syncNow);
+assert.deepStrictEqual(failedPresentation, {
+  tone: 'blue', message: '本地数据 · 上次 08-20 14:30', actionLabel: '重试',
+});
+const unsyncedPresentation = syncPresentationCase.page._buildHomeSyncPresentation({
+  phase: 'idle', tone: 'gray', lastAlignedAt: 0,
+}, syncNow);
+assert.strictEqual(unsyncedPresentation.message, '本地数据 · 尚未同步');
+const priorYearPresentation = syncPresentationCase.page._buildHomeSyncPresentation({
+  phase: 'idle',
+  tone: 'gray',
+  lastAlignedAt: Date.UTC(2025, 11, 31, 15, 59),
+}, syncNow);
+assert.strictEqual(
+  priorYearPresentation.message,
+  '本地数据 · 上次 2025-12-31 23:59',
+  '跨年份同步时间必须保留完整年份',
 );
 
 const decorationCase = createPage('2', 'forward', '南京东路', peopleSquare.id);
@@ -300,7 +353,20 @@ assert(homepageWxml.includes('background-color: {{line.color}};'), '线路选择
 assert(homepageWxml.includes('class="station-card-shell'), '卡片必须使用统一圆角阴影壳层');
 assert(homepageWxml.includes('station-motion-card'), '卡片必须暴露 WXS 视图层选择器');
 assert(homepageWxml.includes('data-motion-index="{{index}}"'), '卡片必须向 WXS 暴露连续站点索引');
-assert(homepageWxml.includes('当前计算起点'), '首页必须显式标注计算起点');
+assert(homepageWxml.includes('class="city-control"'), '城市必须使用独立胶囊入口');
+assert(homepageWxml.includes('bindtap="onOpenCityPicker"'), '城市胶囊必须可打开城市面板');
+assert(homepageWxml.includes('更多城市陆续开放'), '第一版城市面板必须说明后续城市计划');
+assert(homepageWxml.includes('class="origin-name-control"'), '起点站名必须是独立点击区');
+assert(homepageWxml.includes('bindtap="onOpenStationPicker"'), '点击起点站名必须打开站点选择器');
+assert(homepageWxml.includes('自选起点'), '手动起点必须使用已确认的用户文案');
+assert(homepageWxml.includes('恢复定位'), '自选起点必须提供恢复定位入口');
+assert(!homepageWxml.includes('当前计算起点</text>'), '顶部不得继续常驻旧计算起点标签');
+assert(!homepageWxml.includes('>更换</text>'), '顶部不得继续常驻旧更换按钮');
+assert(!homepageJs.includes("locationLabel: '尚未开启定位'"), '首次进入不得继续使用旧定位状态文案');
+assert(!homepageJs.includes("locationActionLabel: '开启智能定位'"), '首次进入不得继续使用旧定位操作文案');
+assert(homepageWxml.includes('sync-action__icon'), '更新入口必须包含刷新图标');
+assert(homepageWxml.includes('sync-action__icon--spinning'), '刷新图标必须在更新期间进入旋转状态');
+assert(!homepageWxml.includes('>检查更新</button>'), '同步入口不得继续使用旧长胶囊文案');
 assert(homepageWxml.includes('bindtap="onSelectTransferLine"'), '换乘线路胶囊必须可点击');
 assert(homepageWxml.includes('capture-bind:touchstart="onWheelTouchStart"'), '站点区域必须保留横滑换乘起点识别');
 assert(homepageWxml.includes('capture-bind:touchmove="onWheelTouchMove"'), 'touchmove 只能识别横纵手势，不得驱动动画');
@@ -325,6 +391,11 @@ assert(!/\.station-card-shell--active[^}]*width:/.test(homepageWxss), '焦点动
 assert(!/\.station-card-shell\s*\{[^}]*transition:/.test(homepageWxss), '视图层逐帧 transform 不得叠加 CSS transition');
 assert(!homepageWxss.includes('.station-focus-lens'), '样式中不得残留固定背景光场');
 assert(/\.line-picker-pill\s*\{[^}]*border-radius:\s*999rpx/.test(homepageWxss), '线路选择项必须使用胶囊样式');
+assert(/\.city-control\s*\{[^}]*border-radius:\s*999rpx/.test(homepageWxss), '城市入口必须使用胶囊样式');
+assert(/\.sync-bar--blue\s+\.sync-bar__dot[^}]*#007aff/.test(homepageWxss), '本地数据状态必须使用蓝色圆点');
+assert(/\.sync-bar--green\s+\.sync-bar__dot[^}]*#29a36a/.test(homepageWxss), '已同步状态必须使用绿色圆点');
+assert(/\.sync-bar__action\s*\{[^}]*background:\s*transparent/.test(homepageWxss), '更新入口不得使用胶囊底色');
+assert(homepageWxss.includes('@keyframes sync-spin'), '更新图标必须具有旋转关键帧');
 assert(!homepageWxss.includes('0 0 30rpx rgba(85,181,190'), '焦点卡片不得使用会被轮盘裁成矩形的外扩背光');
 assert(!/\.eta-label\s*\{[^}]*color:/.test(homepageWxss), 'ETA 不得继续使用固定红色');
 assert(/\.page\s*\{[^}]*padding:\s*24rpx\s+28rpx\s+16rpx/.test(homepageWxss), '原生 TabBar 页面不得重复预留大块底部空间');
@@ -333,4 +404,4 @@ assert(stationMotionWxs.includes("setStyle({"), 'WXS 必须直接在视图层更
 assert(!stationMotionWxs.includes('setData'), '拖动过程不得回到逻辑层 setData');
 assert(stationMotionWxs.includes("callMethod('onStationAnimationFinish'"), 'WXS 只能在吸附结束后提交业务索引');
 
-console.log('首页交互验收通过：方向保持、圆点锁定、横纵手势、三线换乘、定位针、抽屉分组和跨线路纠错上下文。');
+console.log('首页交互验收通过：顶部两行控制、城市面板、自选起点、同步状态、方向保持、圆点锁定、横纵手势、三线换乘和抽屉分组。');
