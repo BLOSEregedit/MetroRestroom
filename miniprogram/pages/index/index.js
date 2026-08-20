@@ -125,6 +125,15 @@ function normalizeLineOptions(options) {
   });
 }
 
+function formatHomeSyncTime(timestamp, nowMs) {
+  const formatted = formatDateTime(timestamp);
+  if (!formatted) return '';
+  const current = formatDateTime(nowMs || Date.now());
+  return current && current.slice(0, 4) === formatted.slice(0, 4)
+    ? formatted.slice(5)
+    : formatted;
+}
+
 Page({
   data: {
     cityName: '上海',
@@ -148,6 +157,7 @@ Page({
     soundEnabled: true,
     vibrationEnabled: true,
     showLinePicker: false,
+    showCityPicker: false,
     showStationPicker: false,
     showRestroomDrawer: false,
     lineOptions: [],
@@ -158,15 +168,16 @@ Page({
     drawerGroups: [],
     locationDataReady: false,
     locationStatus: 'notRequested',
-    locationLabel: '尚未开启定位',
-    locationActionLabel: '开启智能定位',
+    locationLabel: '未定位',
+    locationActionLabel: '开启定位',
     showLocationAction: true,
     showLocationCandidates: false,
     locationCandidates: [],
     locationIssue: '',
     syncPhase: 'idle',
-    syncTone: 'gray',
-    syncMessage: '尚未完成首次同步',
+    syncTone: 'blue',
+    syncMessage: '本地数据 · 尚未同步',
+    syncActionLabel: '更新',
   },
 
   onLoad() {
@@ -485,7 +496,7 @@ Page({
         label: '手动查询', action: '定位数据准备中', showAction: false,
       },
       notRequested: {
-        label: '尚未开启定位', action: '开启智能定位', showAction: true,
+        label: '未定位', action: '开启定位', showAction: true,
       },
       cached: {
         label: '上次位置', action: '重新定位', showAction: true,
@@ -494,19 +505,19 @@ Page({
         label: '正在定位…', action: '', showAction: false,
       },
       success: {
-        label: '智能定位', action: '重新定位', showAction: true,
+        label: '智能定位', action: '', showAction: false,
       },
       ambiguous: {
-        label: '位置需要确认', action: '查看候选', showAction: true,
+        label: '位置待确认', action: '查看候选', showAction: true,
       },
       unmatched: {
-        label: '附近未匹配到地铁站', action: '重新定位', showAction: true,
+        label: '未匹配站点', action: '重新定位', showAction: true,
       },
       denied: {
-        label: '未开启定位', action: '去开启定位', showAction: true,
+        label: '未开启定位', action: '去开启', showAction: true,
       },
       failed: {
-        label: '定位失败，仍可手动查询', action: '重新定位', showAction: true,
+        label: '定位失败', action: '重新定位', showAction: true,
       },
     };
     const state = states[status] || states.failed;
@@ -726,11 +737,28 @@ Page({
       cityId: SYNC_CITY_ID,
       bundleSchema: SYNC_BUNDLE_SCHEMA,
     });
+    const presentation = this._buildHomeSyncPresentation(status);
     this.setData({
       syncPhase: status.phase,
-      syncTone: status.tone,
-      syncMessage: status.message,
+      syncTone: presentation.tone,
+      syncMessage: presentation.message,
+      syncActionLabel: presentation.actionLabel,
     });
+  },
+
+  _buildHomeSyncPresentation(status, nowMs) {
+    const input = status || {};
+    const isChecking = input.phase === 'checking';
+    const isFresh = input.tone === 'green'
+      || (isChecking && this.data.syncTone === 'green');
+    const timeLabel = formatHomeSyncTime(input.lastAlignedAt, nowMs);
+    return {
+      tone: isFresh ? 'green' : 'blue',
+      message: isFresh
+        ? `已同步${timeLabel ? ` · ${timeLabel}` : ''}`
+        : `本地数据${timeLabel ? ` · 上次 ${timeLabel}` : ' · 尚未同步'}`,
+      actionLabel: isChecking ? '更新中' : (input.phase === 'failed' ? '重试' : '更新'),
+    };
   },
 
   _scheduleSyncForVisibleStation(delayMs) {
@@ -1216,6 +1244,18 @@ Page({
     this._refreshHomeView(visibleStationId);
     this._saveCurrentPreferences();
     this._addRecentRecord(this._rawStations[this.data.currentIndex], '切换线路');
+  },
+
+  onOpenCityPicker() {
+    this.setData({ showCityPicker: true });
+  },
+
+  onCloseCityPicker() {
+    this.setData({ showCityPicker: false });
+  },
+
+  onSelectCity() {
+    this.setData({ showCityPicker: false });
   },
 
   onOpenStationPicker() {
