@@ -1,8 +1,4 @@
-.profile-page { min-height: 100vh; box-sizing: border-box; padding: 44rpx 32rpx 56rpx; }
-.profile-header { display: flex; align-items: center; margin-bottom: 52rpx; }
-.brand-mark { width: 76rpx; height: 76rpx; margin-right: 20rpx; border-radius: 24rpx; background: #007aff; }
-.profile-title { font-size: 42rpx; font-weight: 600; }
-.profile-subtitle { margin-top: 8rpx; color: #8a8a8a; font-size: 25rpx; }
+.profile-page { min-height: 100vh; box-sizing: border-box; padding: 12rpx 32rpx calc(128rpx + env(safe-area-inset-bottom)); }
 .section-title { margin: 28rpx 8rpx 18rpx; color: #777; font-size: 25rpx; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; }
 .clear-action { margin: 28rpx 8rpx 18rpx; color: #007aff; font-size: 24rpx; }

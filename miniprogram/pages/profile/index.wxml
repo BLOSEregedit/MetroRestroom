@@ -1,5 +1,4 @@
 <view class="profile-page">
-  <view class="profile-header"><image class="brand-mark" src="/images/logo.png" mode="aspectFit" /><view><view class="profile-title">我的</view><view class="profile-subtitle">偏好与使用记录</view></view></view>
   <view class="section-heading"><view class="section-title">最近记录</view><text wx:if="{{recentRecords.length}}" class="clear-action" bindtap="onClearRecent">清空</text></view>
   <view wx:if="{{!recentRecords.length}}" class="empty-card"><view class="empty-icon">⌁</view><view class="empty-title">还没有最近记录</view><view class="empty-description">设置锚点或查看厕所信息后，会显示在这里</view></view>
   <view wx:else class="settings-card recent-card">

@@ -1,4 +1,4 @@
-.page { display: flex; height: 100vh; min-height: 0; box-sizing: border-box; flex-direction: column; overflow: hidden; padding: 24rpx 28rpx 16rpx; background: #f6f7f8; color: #1f2429; font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+.page { display: flex; height: 100vh; min-height: 0; box-sizing: border-box; flex-direction: column; overflow: hidden; padding: 24rpx 28rpx calc(96rpx + env(safe-area-inset-bottom)); background: #f6f7f8; color: #1f2429; font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
 .control-card { position: relative; z-index: 2; padding: 22rpx 26rpx 18rpx; border: 1rpx solid rgba(24,32,40,.07); border-radius: 28rpx; background: rgba(255,255,255,.96); box-shadow: 0 12rpx 40rpx rgba(33,42,52,.08); }
 .control-row { display: flex; align-items: center; justify-content: space-between; }
 .control-row--second { align-items: flex-end; margin-top: 18rpx; }

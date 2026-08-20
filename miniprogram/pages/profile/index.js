@@ -47,6 +47,8 @@ Page({
     recentExpanded: false,
   },
   onShow() {
+    const tabBar = this.getTabBar && this.getTabBar();
+    if (tabBar) tabBar.setData({ selected: 1 });
     const preferences = getPreferences();
     this._allRecentRecords = formatRecentRecords(dedupeRecentRecords(getRecentRecords()));
     this.setData({
