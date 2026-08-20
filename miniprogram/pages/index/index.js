@@ -219,6 +219,8 @@ Page({
   },
 
   onShow() {
+    const tabBar = this.getTabBar && this.getTabBar();
+    if (tabBar) tabBar.setData({ selected: 0 });
     if (!this._state) return;
 
     const initialState = catalog.getInitialHomeState();

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""生成微信 TabBar 图标：首页改用洗手间门形图标，选中态使用苹果蓝。"""
+"""生成微信 TabBar 图标：首页与个人中心使用统一的线性图标。"""
 
-import math
 import os
 from PIL import Image, ImageDraw
 
@@ -9,93 +8,45 @@ ICONS_DIR = os.path.join(os.path.dirname(__file__), '..', 'miniprogram', 'images
 SIZE = 48
 
 # 颜色
-BLUE = (0, 122, 255, 255)      # 苹果蓝，对应 app.json selectedColor / profile 主色
-WHITE = (255, 255, 255, 255)
-GRAY = (138, 138, 138, 255)    # 未选中灰，对应 tabBar color #8A8A8A
-ORIGIN_GREEN = (7, 193, 96)      # 旧图标填充色
+SCALE = 4
+BLUE = (0, 122, 255, 255)
+GRAY = (138, 138, 138, 255)
 
 
-def create_base():
-    return Image.new('RGBA', (SIZE, SIZE), (0, 0, 0, 0))
+def icon_canvas():
+    return Image.new('RGBA', (SIZE * SCALE, SIZE * SCALE), (0, 0, 0, 0))
 
 
-def draw_restroom_door(draw, color, fill_door=False, cutout_color=None):
-    """绘制洗手间门 + 人物剪影图标。"""
-    # 门板外框
-    frame = [10, 6, 38, 42]
-    radius = 4
-    if fill_door:
-        draw.rounded_rectangle(frame, radius=radius, fill=color)
-    else:
-        draw.rounded_rectangle(frame, radius=radius, outline=color, width=3)
-
-    # 人物剪影
-    head_box = [(19, 14), (29, 24)]        # 头部圆
-    body_box = [19, 25, 29, 40]            # 身体（圆角矩形）
-    body_radius = 2
-
-    figure_color = cutout_color if cutout_color else color
-    draw.ellipse(head_box, fill=figure_color)
-    draw.rounded_rectangle(body_box, radius=body_radius, fill=figure_color)
+def draw_home(draw, color):
+    """屋檐、门洞和基座，表达首页入口。"""
+    width = 3 * SCALE
+    draw.line([(8 * SCALE, 23 * SCALE), (24 * SCALE, 9 * SCALE), (40 * SCALE, 23 * SCALE)], fill=color, width=width, joint='curve')
+    draw.line([(12 * SCALE, 20 * SCALE), (12 * SCALE, 39 * SCALE), (36 * SCALE, 39 * SCALE), (36 * SCALE, 20 * SCALE)], fill=color, width=width, joint='curve')
+    draw.rounded_rectangle([20 * SCALE, 29 * SCALE, 28 * SCALE, 39 * SCALE], radius=2 * SCALE, outline=color, width=width)
 
 
-def generate_home_icons():
-    # 未选中：灰色轮廓门板 + 灰色人物
-    inactive = create_base()
-    draw_restroom_door(ImageDraw.Draw(inactive), GRAY, fill_door=False)
-
-    # 选中：蓝色填充门板 + 白色人物镂空
-    active = create_base()
-    draw_restroom_door(ImageDraw.Draw(active), BLUE, fill_door=True, cutout_color=WHITE)
-
-    inactive.save(os.path.join(ICONS_DIR, 'home.png'))
-    active.save(os.path.join(ICONS_DIR, 'home-active.png'))
+def draw_user(draw, color):
+    """圆形头像与肩部轮廓，表达个人中心入口。"""
+    width = 3 * SCALE
+    draw.ellipse([18 * SCALE, 8 * SCALE, 30 * SCALE, 20 * SCALE], outline=color, width=width)
+    draw.arc([11 * SCALE, 18 * SCALE, 37 * SCALE, 44 * SCALE], start=198, end=342, fill=color, width=width)
+    draw.line([(11 * SCALE, 31 * SCALE), (11 * SCALE, 39 * SCALE), (37 * SCALE, 39 * SCALE), (37 * SCALE, 31 * SCALE)], fill=color, width=width, joint='curve')
 
 
-def _distance(c1, c2):
-    return math.sqrt(sum((a - b) ** 2 for a, b in zip(c1[:3], c2[:3])))
-
-
-def recolor_green_to_blue(src_path, dst_path):
-    """将旧绿色图标映射为苹果蓝，保留白色镂空与抗锯齿。"""
-    img = Image.open(src_path).convert('RGBA')
-    pixels = list(img.getdata())
-    new_pixels = []
-    for r, g, b, a in pixels:
-        if a < 10:
-            new_pixels.append((0, 0, 0, 0))
-            continue
-
-        # 判断颜色更靠近原始绿还是白色
-        d_green = _distance((r, g, b), ORIGIN_GREEN)
-        d_white = _distance((r, g, b), WHITE[:3])
-
-        if d_green + d_white == 0:
-            ratio = 1.0
-        else:
-            ratio = d_white / (d_green + d_white)
-        ratio = max(0.0, min(1.0, ratio))
-
-        nr = int(WHITE[0] * (1 - ratio) + BLUE[0] * ratio)
-        ng = int(WHITE[1] * (1 - ratio) + BLUE[1] * ratio)
-        nb = int(WHITE[2] * (1 - ratio) + BLUE[2] * ratio)
-        new_pixels.append((nr, ng, nb, a))
-
-    img.putdata(new_pixels)
-    img.save(dst_path)
-
-
-def generate_usercenter_active():
-    recolor_green_to_blue(
-        os.path.join(ICONS_DIR, 'usercenter-active.png'),
-        os.path.join(ICONS_DIR, 'usercenter-active.png'),
+def save_icon(filename, painter, color):
+    image = icon_canvas()
+    painter(ImageDraw.Draw(image), color)
+    image.resize((SIZE, SIZE), Image.Resampling.LANCZOS).save(
+        os.path.join(ICONS_DIR, filename),
     )
 
 
 def main():
-    generate_home_icons()
-    generate_usercenter_active()
-    print('TabBar 图标已生成：home.png / home-active.png / usercenter-active.png')
+    save_icon('home.png', draw_home, GRAY)
+    save_icon('home-active.png', draw_home, BLUE)
+    save_icon('usercenter.png', draw_user, GRAY)
+    save_icon('usercenter-active.png', draw_user, BLUE)
+    print('TabBar 图标已生成：首页与个人中心线性图标（普通／选中态）。')
 
 
 if __name__ == '__main__':

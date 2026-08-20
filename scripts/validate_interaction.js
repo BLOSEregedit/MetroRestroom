@@ -458,8 +458,22 @@ assert(/\.picker-list\s*\{[^}]*height:\s*55vh/.test(homepageWxss), '站点选择
 assert(/\.drawer-list\s*\{[^}]*height:\s*57vh/.test(homepageWxss), '厕所详情抽屉列表必须具有明确高度');
 assert(!homepageWxss.includes('0 0 30rpx rgba(85,181,190'), '焦点卡片不得使用会被轮盘裁成矩形的外扩背光');
 assert(!/\.eta-label\s*\{[^}]*color:/.test(homepageWxss), 'ETA 不得继续使用固定红色');
-assert(/\.home-content\s*\{[^}]*padding:\s*8rpx\s+28rpx\s+16rpx/.test(homepageWxss), '首页主体必须保留紧凑底部空间');
+assert(/\.home-content\s*\{[^}]*padding:\s*8rpx\s+28rpx\s+calc\(96rpx\s+\+\s+env\(safe-area-inset-bottom\)\)/.test(homepageWxss), '首页主体必须为自定义底部导航预留精确空间');
 assert(!homepageWxss.includes('inline-flex'), 'Skyline 首页不得使用不稳定的 inline-flex 布局');
+const appConfig = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../miniprogram/app.json'), 'utf8'));
+const customTabBarWxml = fs.readFileSync(
+  path.resolve(__dirname, '../miniprogram/custom-tab-bar/index.wxml'),
+  'utf8',
+);
+const customTabBarWxss = fs.readFileSync(
+  path.resolve(__dirname, '../miniprogram/custom-tab-bar/index.wxss'),
+  'utf8',
+);
+assert.strictEqual(appConfig.tabBar.custom, true, '底部导航必须启用自定义实现，才能控制高度与图标垂直位置');
+assert(customTabBarWxml.includes('class="tab-bar__item'), '自定义底部导航必须保留可点击的 Tab 项');
+assert(!customTabBarWxml.includes('tab-bar__label'), '图标足以表达入口时，底部导航不得保留冗余文字');
+assert(/\.tab-bar__content\s*\{[^}]*height:\s*80rpx/.test(customTabBarWxss), '自定义底部导航主视觉区必须压缩为 80rpx');
+assert(/\.tab-bar__item\s*\{[^}]*align-items:\s*center[^}]*justify-content:\s*center/.test(customTabBarWxss), '底部导航图标必须在可视区域内居中');
 
 const audioCreateOptions = [];
 let audioPlayCount = 0;
