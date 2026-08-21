@@ -1,15 +1,18 @@
 const catalog = require('../../data/catalog');
+const stationEntranceData = require('../../data/station-entrances');
 const stationLocationData = require('../../data/station-locations');
 const { createStationFeedback } = require('../../utils/feedback');
-const { rankNearbyStations } = require('../../utils/location');
+const { rankNearbyStations, resolveNearestEntranceLine } = require('../../utils/location');
 const {
   requestCurrentPosition,
   openLocationSettings,
 } = require('../../utils/location-service');
 const {
   addRecentRecord,
+  getStationLineChoice,
   savePreferences,
   saveLastLocationStation,
+  saveStationLineChoice,
 } = require('../../utils/storage');
 const {
   formatDateTime,
@@ -157,12 +160,21 @@ Page({
     soundEnabled: true,
     vibrationEnabled: true,
     showLinePicker: false,
+    isManualSelectionGuide: false,
+    manualStationOptions: [],
     showCityPicker: false,
     showStationPicker: false,
     showRestroomDrawer: false,
     lineOptions: [],
     routeOptions: [],
     showRouteSelector: false,
+    currentRouteTerminal: '',
+    alternateRouteId: '',
+    alternateRouteActionLabel: '',
+    isLoopLine: false,
+    loopLastIndex: 0,
+    loopPreviousStationName: '',
+    loopNextStationName: '',
     drawerStation: null,
     drawerRestrooms: [],
     drawerGroups: [],
@@ -173,6 +185,10 @@ Page({
     showLocationAction: true,
     showLocationCandidates: false,
     locationCandidates: [],
+    showNearbyStationPicker: false,
+    nearbyStationCandidates: [],
+    locationPendingStationName: '',
+    locationPendingDistanceLabel: '',
     locationIssue: '',
     syncPhase: 'idle',
     syncTone: 'blue',
@@ -194,6 +210,9 @@ Page({
     this._directionMode = initialState.directionMode || 'default';
     this._locationRequestToken = 0;
     this._hasConfirmedLocation = Boolean(initialState.lastLocationStation);
+    this._explicitLineId = '';
+    this._pendingLocationMatch = null;
+    this._pendingLocationPosition = null;
     this._feedback = createStationFeedback({
       soundEnabled: initialState.soundEnabled,
       vibrationEnabled: initialState.vibrationEnabled,
@@ -488,7 +507,8 @@ Page({
     if (this._feedback) this._feedback.reset();
   },
 
-  _setLocationStatus(status, issue) {
+  _setLocationStatus(status, issue, details) {
+    const context = details || {};
     const states = {
       unavailable: {
         label: '手动查询', action: '定位数据准备中', showAction: false,
@@ -505,11 +525,24 @@ Page({
       success: {
         label: '智能定位', action: '', showAction: false,
       },
-      ambiguous: {
-        label: '位置待确认', action: '查看候选', showAction: true,
+      nearest: {
+        label: `最近站 · ${context.distanceLabel || '距离待确认'}`, action: '', showAction: false,
+      },
+      stationRequired: {
+        label: '附近站待选择',
+        action: '选择',
+        showAction: true,
+      },
+      selectedNearby: {
+        label: `已选站 · ${context.distanceLabel || '距离待确认'}`,
+        action: '',
+        showAction: false,
+      },
+      lineRequired: {
+        label: '线路待确认', action: '选择', showAction: true,
       },
       unmatched: {
-        label: '未匹配站点', action: '重新定位', showAction: true,
+        label: '5公里内无站', action: '手动选择', showAction: true,
       },
       denied: {
         label: '未开启定位', action: '去开启', showAction: true,
@@ -529,13 +562,122 @@ Page({
   },
 
   _cancelPendingLocation() {
-    if (this.data.locationStatus !== 'locating') return;
-    this._locationRequestToken += 1;
-    this._setLocationStatus(this._hasConfirmedLocation ? 'cached' : 'notRequested');
+    const pendingStatus = ['locating', 'stationRequired', 'lineRequired'].includes(
+      this.data.locationStatus,
+    );
+    if (this.data.locationStatus === 'locating') this._locationRequestToken += 1;
+    this._pendingLocationMatch = null;
+    this._pendingLocationPosition = null;
+    this.setData({
+      showNearbyStationPicker: false,
+      showLocationCandidates: false,
+      nearbyStationCandidates: [],
+      locationCandidates: [],
+      locationPendingStationName: '',
+      locationPendingDistanceLabel: '',
+    });
+    if (pendingStatus) {
+      this._setLocationStatus(this._hasConfirmedLocation ? 'cached' : 'notRequested');
+    }
   },
 
   _buildHomeView() {
     return catalog.buildHomeView(Object.assign({}, this._state));
+  },
+
+  _getManualStationOptions(lineId) {
+    const lineOption = this.data.lineOptions.find((item) => item.id === lineId) || {};
+    const routes = (lineOption.routes && lineOption.routes.length)
+      ? lineOption.routes
+      : [{
+        id: lineOption.defaultRouteId,
+        directions: lineOption.directions || [],
+      }];
+    const routeGroups = routes.map((route) => {
+      const direction = (route.directions && route.directions[0] && route.directions[0].id)
+        || lineOption.defaultDirection
+        || 'forward';
+      const view = catalog.buildHomeView({
+        lineId,
+        routeId: route.id || lineOption.defaultRouteId,
+        direction,
+      });
+      return {
+        route,
+        stations: view.stations || [],
+      };
+    });
+    const seen = Object.create(null);
+    const options = [];
+    const appendStations = (stations, metadata) => {
+      let sectionLabel = metadata.sectionLabel || '';
+      (stations || []).forEach((station) => {
+        if (!station.id || seen[station.id]) return;
+        seen[station.id] = true;
+        options.push({
+          id: station.id,
+          name: station.name,
+          routeId: metadata.routeId || '',
+          sectionLabel,
+          branchRoleLabel: metadata.branchRoleLabel || '',
+          contextLabel: metadata.contextLabel || '',
+        });
+        sectionLabel = '';
+      });
+    };
+
+    if (lineOption.type !== 'branched' || routeGroups.length < 2) {
+      routeGroups.forEach((group) => {
+        appendStations(group.stations, {
+          routeId: '',
+          sectionLabel: '',
+          contextLabel: '',
+        });
+      });
+      return options;
+    }
+
+    const routeCountByStationId = Object.create(null);
+    routeGroups.forEach((group) => {
+      const routeSeen = Object.create(null);
+      group.stations.forEach((station) => {
+        if (!station.id || routeSeen[station.id]) return;
+        routeSeen[station.id] = true;
+        routeCountByStationId[station.id] = (routeCountByStationId[station.id] || 0) + 1;
+      });
+    });
+
+    const orderedRouteGroups = routeGroups.slice().sort((left, right) => {
+      const roleOrder = { main: 0, branch: 1 };
+      const leftOrder = Object.prototype.hasOwnProperty.call(roleOrder, left.route.branchRole)
+        ? roleOrder[left.route.branchRole]
+        : 2;
+      const rightOrder = Object.prototype.hasOwnProperty.call(roleOrder, right.route.branchRole)
+        ? roleOrder[right.route.branchRole]
+        : 2;
+      return leftOrder - rightOrder;
+    });
+    appendStations(orderedRouteGroups[0].stations.filter(
+      (station) => routeCountByStationId[station.id] > 1,
+    ), {
+      routeId: '',
+      sectionLabel: '共线段',
+      branchRoleLabel: '',
+      contextLabel: '',
+    });
+    orderedRouteGroups.forEach((group) => {
+      const terminalName = group.route.terminalName || group.route.name || '该支线';
+      const branchRoleLabel = group.route.branchRole === 'main' ? '主线' : '支线';
+      appendStations(group.stations.filter(
+        (station) => routeCountByStationId[station.id] === 1,
+      ), {
+        routeId: group.route.id,
+        sectionLabel: branchRoleLabel,
+        branchRoleLabel,
+        contextLabel: `${terminalName}方向`,
+      });
+    });
+    return options;
   },
 
   _getDirectionOptions(lineOption, routeId) {
@@ -576,6 +718,8 @@ Page({
     this._state.originStationId = homeView.originStationId || this._state.originStationId;
     const lineOption = this.data.lineOptions.find((item) => item.id === this._state.lineId) || {};
     const routeOptions = lineOption.routes || [];
+    const currentRoute = routeOptions.find((item) => item.id === this._state.routeId) || {};
+    const alternateRoute = routeOptions.find((item) => item.id !== this._state.routeId) || {};
 
     const lineColor = getLineColor(homeView.line);
     const patch = {
@@ -589,6 +733,13 @@ Page({
       routeId: this._state.routeId,
       routeOptions,
       showRouteSelector: lineOption.type === 'branched' && routeOptions.length > 1,
+      currentRouteTerminal: currentRoute.terminalName || currentRoute.name || '',
+      alternateRouteId: alternateRoute.id || '',
+      alternateRouteActionLabel: alternateRoute.actionLabel || '',
+      isLoopLine: homeView.line.type === 'loop',
+      loopLastIndex: Math.max(rawStations.length - 1, 0),
+      loopPreviousStationName: rawStations.length ? rawStations[rawStations.length - 1].name : '',
+      loopNextStationName: rawStations.length ? rawStations[0].name : '',
       currentIndex,
       stations: this._decorateStations(rawStations, currentIndex, lineColor),
     };
@@ -664,10 +815,20 @@ Page({
       const primaryRestroom = restrooms.find((restroom) => !restroom.hasOperationalIssue)
         || restrooms[0]
         || null;
+      const hasRestroomRecords = restrooms.length > 0;
+      const hasMultipleRestroomRecords = restrooms.length > 1;
+      const wayfindingSummary = primaryRestroom && primaryRestroom.wayfindingSummary;
       return Object.assign({}, station, {
         restrooms,
         primaryRestroom,
         restroomCount: restrooms.length,
+        hasMultipleRestroomRecords,
+        restroomCapsuleLabel: hasRestroomRecords
+          ? (hasMultipleRestroomRecords ? '卫生间 · 多处' : '卫生间')
+          : '',
+        restroomAriaLabel: hasRestroomRecords
+          ? `${station.name}站，${hasMultipleRestroomRecords ? '有多处卫生间' : '有卫生间'}${wayfindingSummary ? `，${wayfindingSummary}` : ''}，轻点查看详情`
+          : `${station.name}站，暂无厕所记录`,
         isActive: index === currentIndex,
         isBeforeFocus: index === currentIndex - 1,
         isAfterFocus: index === currentIndex + 1,
@@ -884,6 +1045,7 @@ Page({
   onWheelCycleStart(session) {
     const nextSession = Number(session) || 0;
     if (nextSession < Number(this._wheelFeedbackSession)) return;
+    this._suppressCardTapUntil = Date.now() + 320;
     if (this._wheelSnapTimer) {
       clearTimeout(this._wheelSnapTimer);
       this._wheelSnapTimer = null;
@@ -1128,6 +1290,29 @@ Page({
     this._scheduleSyncForVisibleStation(320);
   },
 
+  onLoopBoundaryTap(event) {
+    if (!this.data.isLoopLine || !(this._rawStations || []).length) return;
+    const targetIndex = clamp(
+      Number(event.currentTarget.dataset.targetIndex) || 0,
+      0,
+      this._rawStations.length - 1,
+    );
+    const slotHeight = Math.max(1, Number(this.data.wheelSlotHeight) || 1);
+    this._resetWheelWorklet(
+      targetIndex,
+      this._rawStations.length - 1,
+      slotHeight,
+      { position: targetIndex },
+    );
+    this.setData({
+      wheelScrollTop: targetIndex * slotHeight,
+      currentIndex: targetIndex,
+      stations: this._decorateStations(this._rawStations, targetIndex, this.data.lineColor),
+    });
+    this._updateSyncStatus();
+    this._scheduleSyncForVisibleStation(320);
+  },
+
   onStationAnimationFinish(payload) {
     const detail = payload && payload.detail ? payload.detail : (payload || {});
     const rawIndex = detail.currentIndex !== undefined ? detail.currentIndex : detail.current;
@@ -1163,6 +1348,7 @@ Page({
       : (Number(payload && payload.deltaY) || 0);
     if (Math.abs(deltaX) < TRANSFER_SWIPE_PX
       || Math.abs(deltaX) <= Math.abs(deltaY) * HORIZONTAL_GESTURE_RATIO) return;
+    this._suppressCardTapUntil = Date.now() + 320;
 
     const station = (this._rawStations || []).find(
       (item) => item.id === ((payload && payload.stationId) || this._visibleStationId()),
@@ -1208,11 +1394,13 @@ Page({
     if (!option) return;
 
     this._cancelPendingLocation();
+    this._explicitLineId = option.id;
+    this._directionMode = 'default';
     this._state.lineId = option.id;
     this._state.direction = option.defaultDirection
       || (option.directions && option.directions[0] && option.directions[0].id)
       || 'forward';
-    this._state.routeId = option.type === 'branched' ? '' : option.defaultRouteId;
+    this._state.routeId = option.defaultRouteId;
     this._refreshHomeView(transfer.stationId);
     this._saveCurrentPreferences();
     this._addRecentRecord(this._rawStations[this.data.currentIndex], '换乘浏览');
@@ -1220,28 +1408,59 @@ Page({
   },
 
   onOpenLinePicker() {
-    this.setData({ showLinePicker: true });
+    this.setData({
+      isManualSelectionGuide: false,
+      manualStationOptions: [],
+      showLinePicker: true,
+    });
   },
 
   onCloseLinePicker() {
-    this.setData({ showLinePicker: false });
+    this.setData({
+      isManualSelectionGuide: false,
+      manualStationOptions: [],
+      showLinePicker: false,
+    });
   },
 
   onSelectLine(event) {
     const lineId = event.currentTarget.dataset.lineId;
     const option = this.data.lineOptions.find((item) => item.id === lineId) || {};
     const visibleStationId = this._visibleStationId();
+    const continueManualSelection = this.data.isManualSelectionGuide;
+    const previousLineId = this._state.lineId;
+    const previousRouteId = this._state.routeId;
+    const previousDirection = this._state.direction;
+    const previousDirectionMode = this._directionMode;
+    const preserveManualRoute = continueManualSelection
+      && lineId === previousLineId
+      && (option.routes || []).some((route) => route.id === previousRouteId);
 
     this._cancelPendingLocation();
+    this._explicitLineId = lineId;
     this._state.lineId = lineId;
-    this._state.direction = option.defaultDirection
-      || (option.directions && option.directions[0] && option.directions[0].id)
-      || 'forward';
-    this._state.routeId = option.type === 'branched' ? '' : option.defaultRouteId;
+    this._state.routeId = preserveManualRoute ? previousRouteId : option.defaultRouteId;
+    const routeDirections = this._getDirectionOptions(option, this._state.routeId);
+    const preserveManualDirection = preserveManualRoute && routeDirections.some(
+      (direction) => direction.id === previousDirection,
+    );
+    const defaultRouteDirection = routeDirections.find(
+      (direction) => direction.id === option.defaultDirection,
+    ) || routeDirections[0];
+    this._state.direction = preserveManualDirection
+      ? previousDirection
+      : (defaultRouteDirection && defaultRouteDirection.id) || 'forward';
+    this._directionMode = preserveManualDirection ? previousDirectionMode : 'default';
     this.setData({ showLinePicker: false });
     this._refreshHomeView(visibleStationId);
     this._saveCurrentPreferences();
     this._addRecentRecord(this._rawStations[this.data.currentIndex], '切换线路');
+    if (continueManualSelection) {
+      this.setData({
+        manualStationOptions: this._getManualStationOptions(lineId),
+        showStationPicker: true,
+      });
+    }
   },
 
   onOpenCityPicker() {
@@ -1257,18 +1476,58 @@ Page({
   },
 
   onOpenStationPicker() {
-    this.setData({ showStationPicker: true });
+    this.setData({
+      isManualSelectionGuide: false,
+      manualStationOptions: [],
+      showStationPicker: true,
+    });
   },
 
   onCloseStationPicker() {
-    this.setData({ showStationPicker: false });
+    this.setData({
+      isManualSelectionGuide: false,
+      manualStationOptions: [],
+      showStationPicker: false,
+    });
+  },
+
+  onBackToManualLinePicker() {
+    if (!this.data.isManualSelectionGuide) return;
+    this.setData({
+      manualStationOptions: [],
+      showStationPicker: false,
+      showLinePicker: true,
+    });
   },
 
   onSelectOriginStation(event) {
-    const originStationId = event.currentTarget.dataset.stationId;
+    const dataset = (event.currentTarget && event.currentTarget.dataset) || {};
+    const originStationId = dataset.stationId;
+    const requestedRouteId = dataset.routeId;
+    if (requestedRouteId) {
+      const lineOption = this.data.lineOptions.find(
+        (item) => item.id === this._state.lineId,
+      ) || {};
+      const route = (lineOption.routes || []).find((item) => item.id === requestedRouteId);
+      if (route) {
+        this._state.routeId = route.id;
+        const routeDirections = this._getDirectionOptions(lineOption, route.id);
+        if (!routeDirections.some((direction) => direction.id === this._state.direction)) {
+          this._state.direction = (routeDirections[0] && routeDirections[0].id)
+            || lineOption.defaultDirection
+            || 'forward';
+          this._directionMode = 'default';
+        }
+      }
+    }
     this._cancelPendingLocation();
     this._state.originStationId = originStationId;
-    this.setData({ isManualAnchor: true, showStationPicker: false });
+    this.setData({
+      isManualAnchor: true,
+      isManualSelectionGuide: false,
+      manualStationOptions: [],
+      showStationPicker: false,
+    });
     this._refreshHomeView(originStationId);
     this._saveCurrentPreferences({ originMode: 'manual' });
     this._addRecentRecord(this._rawStations[this.data.currentIndex], '设置起点');
@@ -1294,12 +1553,42 @@ Page({
   },
 
   onRestoreSmartLocation() {
+    if ((this.data.locationStatus === 'lineRequired' && this.data.locationCandidates.length)
+      || (this.data.locationStatus === 'stationRequired'
+        && this.data.nearbyStationCandidates.length)
+      || (this.data.locationStatus === 'denied'
+        && this.data.locationIssue === 'permissionDenied')) {
+      this.onLocationAction();
+      return;
+    }
+    this._restoreLastConfirmedLocation();
     this.onRequestLocation();
   },
 
+  _restoreLastConfirmedLocation() {
+    if (!this._hasConfirmedLocation || !this._systemOriginStationId) return false;
+
+    const visibleStationId = this._visibleStationId();
+    this._state.originStationId = this._systemOriginStationId;
+    this.setData({ isManualAnchor: false });
+    this._refreshHomeView(visibleStationId || this._systemOriginStationId);
+    this._saveCurrentPreferences({ originMode: 'smart' });
+    this._setLocationStatus('cached');
+    return true;
+  },
+
   onLocationAction() {
-    if (this.data.locationStatus === 'ambiguous' && this.data.locationCandidates.length) {
+    if (this.data.locationStatus === 'lineRequired' && this.data.locationCandidates.length) {
       this.setData({ showLocationCandidates: true });
+      return;
+    }
+    if (this.data.locationStatus === 'stationRequired'
+      && this.data.nearbyStationCandidates.length) {
+      this.setData({ showNearbyStationPicker: true });
+      return;
+    }
+    if (this.data.locationStatus === 'unmatched') {
+      this.onChooseManualLocation();
       return;
     }
     if (this.data.locationStatus === 'denied'
@@ -1309,11 +1598,96 @@ Page({
           wx.showToast({ title: '可继续手动查询', icon: 'none' });
           return;
         }
+        this._restoreLastConfirmedLocation();
         this.onRequestLocation();
       });
       return;
     }
     this.onRequestLocation();
+  },
+
+  _formatLocationDistance(distanceMeters) {
+    const distance = Math.max(Number(distanceMeters) || 0, 0);
+    return distance < 1000
+      ? `约 ${Math.round(distance)} 米`
+      : `约 ${(distance / 1000).toFixed(1)} 公里`;
+  },
+
+  _locationOptionsForMatch(pending) {
+    return catalog.getLocationCandidateOptions(pending, Object.assign({}, this._state, {
+      directionMode: this._directionMode,
+    })).map((candidate) => Object.assign({}, candidate, {
+      physicalStationId: pending.physicalStationId,
+      distanceMeters: pending.distanceMeters,
+      distanceLabel: this._formatLocationDistance(pending.distanceMeters),
+      proximity: pending.proximity,
+      lowAccuracy: pending.lowAccuracy,
+    }));
+  },
+
+  _resolveLocationLineCandidate(pending) {
+    if (!pending || !pending.physicalStationId) return;
+    this._pendingLocationMatch = pending;
+    const options = this._locationOptionsForMatch(pending);
+    if (!options.length) {
+      this._setLocationStatus('failed', 'missingStationContext');
+      return;
+    }
+    if (options.length === 1) {
+      this._applyLocationCandidate(options[0]);
+      return;
+    }
+
+    const entranceResolution = resolveNearestEntranceLine(
+      pending.position,
+      pending.physicalStationId,
+      options.map((option) => option.lineStationId),
+      stationEntranceData.entrances,
+    );
+    if (entranceResolution.status === 'unique') {
+      const entranceOption = options.find(
+        (option) => option.lineStationId === entranceResolution.lineStationId,
+      );
+      if (entranceOption) {
+        this._applyLocationCandidate(Object.assign({}, entranceOption, {
+          entranceRef: entranceResolution.entranceRef,
+          resolutionSource: 'nearestEntrance',
+        }));
+        return;
+      }
+    }
+
+    const scopedOptions = entranceResolution.lineStationIds
+      && entranceResolution.lineStationIds.length
+      ? options.filter((option) => entranceResolution.lineStationIds.includes(option.lineStationId))
+      : options;
+    const currentOption = this._explicitLineId === this._state.lineId
+      && scopedOptions.find((option) => option.lineId === this._state.lineId);
+    if (currentOption) {
+      this._applyLocationCandidate(Object.assign({}, currentOption, {
+        resolutionSource: 'currentLine',
+      }));
+      return;
+    }
+
+    const savedChoice = getStationLineChoice(pending.physicalStationId);
+    const savedOption = savedChoice && scopedOptions.find(
+      (option) => option.lineStationId === savedChoice.lineStationId,
+    );
+    if (savedOption) {
+      this._applyLocationCandidate(Object.assign({}, savedOption, {
+        resolutionSource: 'savedPhysicalChoice',
+      }));
+      return;
+    }
+
+    this.setData({
+      locationCandidates: scopedOptions,
+      locationPendingStationName: options[0].stationName,
+      locationPendingDistanceLabel: options[0].distanceLabel,
+      showLocationCandidates: true,
+    });
+    this._setLocationStatus('lineRequired');
   },
 
   onRequestLocation() {
@@ -1324,6 +1698,16 @@ Page({
 
     const requestToken = this._locationRequestToken + 1;
     this._locationRequestToken = requestToken;
+    this._pendingLocationMatch = null;
+    this._pendingLocationPosition = null;
+    this.setData({
+      showNearbyStationPicker: false,
+      showLocationCandidates: false,
+      nearbyStationCandidates: [],
+      locationCandidates: [],
+      locationPendingStationName: '',
+      locationPendingDistanceLabel: '',
+    });
     this._setLocationStatus('locating');
     requestCurrentPosition(wx).then((result) => {
       if (requestToken !== this._locationRequestToken) return;
@@ -1336,31 +1720,57 @@ Page({
       const match = rankNearbyStations(result.position, stationLocationData.stations);
       if (match.status === 'unmatched') {
         this._setLocationStatus('unmatched');
+        wx.showToast({ title: '当前定位 5 公里内无站点，请手动选择', icon: 'none' });
         return;
       }
-      if (match.status !== 'success' && match.status !== 'ambiguous') {
+      if (match.status !== 'success' && match.status !== 'selectionRequired') {
         this._setLocationStatus('failed');
         return;
       }
 
-      const candidates = match.candidates.reduce((all, candidate) => (
-        all.concat(catalog.getLocationCandidateOptions(candidate))
-      ), []).map((candidate) => Object.assign({}, candidate, {
-        distanceLabel: candidate.distanceMeters < 1000
-          ? `约 ${candidate.distanceMeters} 米`
-          : `约 ${(candidate.distanceMeters / 1000).toFixed(1)} 公里`,
-      }));
-
-      if (candidates.length !== 1) {
+      if (match.status === 'selectionRequired') {
+        this._pendingLocationPosition = result.position;
+        const nearbyStationCandidates = match.candidates.map((physicalStation) => {
+          const pending = Object.assign({}, physicalStation, {
+            position: result.position,
+            proximity: 'selectedNearby',
+            lowAccuracy: match.lowAccuracy,
+          });
+          const options = this._locationOptionsForMatch(pending);
+          if (!options.length) return null;
+          return Object.assign({}, physicalStation, {
+            stationName: options[0].stationName,
+            lineNames: options.map((option) => option.lineName).join('／'),
+            distanceLabel: options[0].distanceLabel,
+            lowAccuracy: match.lowAccuracy,
+          });
+        }).filter(Boolean);
+        if (!nearbyStationCandidates.length) {
+          this._setLocationStatus('unmatched');
+          wx.showToast({ title: '当前定位 5 公里内无站点，请手动选择', icon: 'none' });
+          return;
+        }
         this.setData({
-          locationCandidates: candidates,
-          showLocationCandidates: true,
+          nearbyStationCandidates,
+          showNearbyStationPicker: true,
         });
-        this._setLocationStatus('ambiguous');
+        this._setLocationStatus('stationRequired', match.issue);
         return;
       }
 
-      this._applyLocationCandidate(candidates[0]);
+      const physicalStation = match.candidates[0];
+      const pending = Object.assign({}, physicalStation, {
+        position: result.position,
+        proximity: match.proximity,
+        lowAccuracy: match.lowAccuracy,
+      });
+      const options = this._locationOptionsForMatch(pending);
+      if (!options.length) {
+        this._setLocationStatus('failed', 'missingStationContext');
+        return;
+      }
+      this._pendingLocationMatch = pending;
+      this._resolveLocationLineCandidate(pending);
     }).catch(() => {
       if (requestToken === this._locationRequestToken) this._setLocationStatus('failed');
     });
@@ -1369,9 +1779,15 @@ Page({
   _applyLocationCandidate(candidate) {
     if (!candidate || !candidate.lineStationId) return;
 
+    if (candidate.resolutionSource !== 'currentLine'
+      && candidate.resolutionSource !== 'userPhysicalChoice'
+      && candidate.lineId !== this._explicitLineId) {
+      this._explicitLineId = '';
+    }
+
     this._systemOriginStationId = candidate.lineStationId;
     this._hasConfirmedLocation = true;
-    this._directionMode = 'default';
+    this._directionMode = candidate.directionMode || 'default';
     this._state.lineId = candidate.lineId;
     this._state.routeId = candidate.routeId;
     this._state.direction = candidate.direction;
@@ -1382,13 +1798,34 @@ Page({
     });
     this.setData({
       isManualAnchor: false,
+      showNearbyStationPicker: false,
       showLocationCandidates: false,
+      nearbyStationCandidates: [],
       locationCandidates: [],
+      locationPendingStationName: '',
+      locationPendingDistanceLabel: '',
     });
     this._refreshHomeView(candidate.lineStationId);
-    this._saveCurrentPreferences({ originMode: 'smart', directionMode: 'default' });
-    this._setLocationStatus('success');
-    wx.showToast({ title: `已定位到${candidate.stationName}`, icon: 'none' });
+    this._saveCurrentPreferences({
+      originMode: 'smart',
+      directionMode: this._directionMode,
+    });
+    this._pendingLocationMatch = null;
+    this._pendingLocationPosition = null;
+    if (candidate.proximity === 'nearest') {
+      this._setLocationStatus('nearest', candidate.lowAccuracy ? 'lowAccuracy' : '', {
+        distanceLabel: candidate.distanceLabel,
+      });
+      wx.showToast({ title: '已按最近站计算，到站路程未计入', icon: 'none' });
+    } else if (candidate.proximity === 'selectedNearby') {
+      this._setLocationStatus('selectedNearby', candidate.lowAccuracy ? 'lowAccuracy' : '', {
+        distanceLabel: candidate.distanceLabel,
+      });
+      wx.showToast({ title: `已选择${candidate.stationName}`, icon: 'none' });
+    } else {
+      this._setLocationStatus('success');
+      wx.showToast({ title: `已定位到${candidate.stationName}`, icon: 'none' });
+    }
   },
 
   onSelectLocationCandidate(event) {
@@ -1396,17 +1833,46 @@ Page({
     const candidate = this.data.locationCandidates.find(
       (item) => item.lineStationId === lineStationId,
     );
-    this._applyLocationCandidate(candidate);
+    if (candidate && this._pendingLocationMatch) {
+      saveStationLineChoice(this._pendingLocationMatch.physicalStationId, {
+        lineStationId: candidate.lineStationId,
+      });
+      this._explicitLineId = candidate.lineId;
+    }
+    this._applyLocationCandidate(candidate && Object.assign({}, candidate, {
+      resolutionSource: 'userPhysicalChoice',
+    }));
   },
 
   onCloseLocationCandidates() {
     this.setData({ showLocationCandidates: false });
   },
 
+  onSelectNearbyStation(event) {
+    const physicalStationId = event.currentTarget.dataset.physicalStationId;
+    const selected = this.data.nearbyStationCandidates.find(
+      (station) => station.physicalStationId === physicalStationId,
+    );
+    if (!selected || !this._pendingLocationPosition) return;
+    const pending = Object.assign({}, selected, {
+      position: this._pendingLocationPosition,
+      proximity: 'selectedNearby',
+    });
+    this.setData({ showNearbyStationPicker: false });
+    this._resolveLocationLineCandidate(pending);
+  },
+
+  onCloseNearbyStationPicker() {
+    this.setData({ showNearbyStationPicker: false });
+  },
+
   onChooseManualLocation() {
+    this._cancelPendingLocation();
     this.setData({
-      showLocationCandidates: false,
-      showStationPicker: true,
+      isManualSelectionGuide: true,
+      manualStationOptions: [],
+      showLinePicker: true,
+      showStationPicker: false,
     });
   },
 
@@ -1494,6 +1960,7 @@ Page({
   },
 
   onOpenRestroomDrawer(event) {
+    if (Date.now() < Number(this._suppressCardTapUntil || 0)) return;
     const stationId = event.currentTarget.dataset.stationId;
     const station = (this.data.stations || []).find((item) => item.id === stationId);
     if (!station || !(station.restrooms || []).length) return;

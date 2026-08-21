@@ -107,6 +107,7 @@ const LINES = Object.freeze({
     routes: Object.freeze([
       Object.freeze({
         id: 'l5-fengxian',
+        branchRole: 'main',
         terminalName: '奉贤新城',
         splitStationName: '东川路',
         directionIds: Object.freeze(['to-fengxian-new-city', 'to-xinzhuang']),
@@ -117,6 +118,7 @@ const LINES = Object.freeze({
       }),
       Object.freeze({
         id: 'l5-minhang-development-zone',
+        branchRole: 'branch',
         terminalName: '闵行开发区',
         splitStationName: '东川路',
         directionIds: Object.freeze(['to-minhang-development-zone', 'to-xinzhuang']),
@@ -166,6 +168,7 @@ const LINES = Object.freeze({
     routes: Object.freeze([
       Object.freeze({
         id: 'l10-hongqiao-railway-station',
+        branchRole: 'main',
         terminalName: '虹桥火车站',
         splitStationName: '龙溪路',
         directionIds: Object.freeze(['to-hongqiao-railway-station', 'to-jilong-road']),
@@ -179,6 +182,7 @@ const LINES = Object.freeze({
       }),
       Object.freeze({
         id: 'l10-hangzhong-road',
+        branchRole: 'branch',
         terminalName: '航中路',
         splitStationName: '龙溪路',
         directionIds: Object.freeze(['to-hangzhong-road', 'to-jilong-road']),
@@ -207,6 +211,7 @@ const LINES = Object.freeze({
     routes: Object.freeze([
       Object.freeze({
         id: 'l11-huaqiao-disney',
+        branchRole: 'branch',
         terminalName: '花桥',
         splitStationName: '嘉定新城',
         directionIds: Object.freeze(['to-huaqiao', 'to-disney']),
@@ -219,6 +224,7 @@ const LINES = Object.freeze({
       }),
       Object.freeze({
         id: 'l11-jiading-north-disney',
+        branchRole: 'main',
         terminalName: '嘉定北',
         splitStationName: '嘉定新城',
         directionIds: Object.freeze(['to-jiading-north', 'to-disney']),

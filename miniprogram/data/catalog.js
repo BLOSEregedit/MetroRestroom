@@ -88,6 +88,19 @@ function routeLabel(route) {
   return names.length > 1 ? `${names[0]}—${names[names.length - 1]}` : route.id;
 }
 
+function getBranchActionLabel(terminalName) {
+  const name = String(terminalName || '').trim();
+  if (!name) return '点击切换支线';
+  const stationName = /站$/.test(name) ? name : `${name}站`;
+  return `点击切换至${stationName}支线`;
+}
+
+function getBranchTrackActionLabel(branchRole, terminalName) {
+  const roleLabel = branchRole === 'main' ? '主线' : '支线';
+  const name = String(terminalName || '').trim();
+  return name ? `切换至${roleLabel} · ${name}方向` : `切换至${roleLabel}`;
+}
+
 function compareLineIds(left, right) {
   return String(left).localeCompare(String(right), 'zh-CN', { numeric: true });
 }
@@ -110,7 +123,9 @@ function getLineOptions() {
       routes: line.routes.map((route) => ({
         id: route.id,
         name: routeLabel(route),
+        branchRole: route.branchRole || '',
         terminalName: route.terminalName || '',
+        actionLabel: getBranchActionLabel(route.terminalName),
         splitStationName: route.splitStationName || '',
         stationNames: (route.stationNames || []).slice(),
         directions: routeDirectionIds(line, route).map((directionId) => ({
@@ -246,6 +261,130 @@ function normalizeAccess(accessRaw) {
     .replace(/费区外/g, '闸外');
 }
 
+function normalizeLocationText(locationRaw) {
+  return String(locationRaw || '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function uniqueValues(values) {
+  return values.filter((value, index, all) => value && all.indexOf(value) === index);
+}
+
+function extractExitLabel(location) {
+  const expanded = String(location || '').replace(
+    /([东南西北]?\d+(?:\s*[、，,\/／.]\s*[东南西北]?\d+)+)号口/g,
+    (match, numbers) => numbers
+      .split(/[、，,\/／.]/)
+      .map((number) => `${number.trim()}号口`)
+      .join('、'),
+  );
+  const exits = [];
+  const exitPattern = /([东南西北]?\d+)号口/g;
+  let match = exitPattern.exec(expanded);
+  while (match) {
+    exits.push(match[1]);
+    match = exitPattern.exec(expanded);
+  }
+  const uniqueExits = uniqueValues(exits);
+  if (!uniqueExits.length) return '';
+  if (uniqueExits.length === 1 && new RegExp(`${uniqueExits[0]}号口外`).test(expanded)) {
+    return `${uniqueExits[0]}号口外`;
+  }
+  const prefix = /近|靠近|附近/.test(location) ? '近' : '';
+  return `${prefix}${uniqueExits.join('／')}号口`;
+}
+
+function extractOrientationLabel(location) {
+  const anchors = [];
+  const directionPattern = /往([^、，,。；;]{1,18}?)方向(?:站台)?(?:的)?(车头|车尾|中部|中间)/g;
+  let match = directionPattern.exec(location);
+  while (match) {
+    anchors.push({
+      destination: match[1].trim(),
+      position: match[2] === '中间' ? '中部' : match[2],
+    });
+    match = directionPattern.exec(location);
+  }
+  const uniqueAnchors = anchors.filter((anchor, index, all) => (
+    all.findIndex((item) => (
+      item.destination === anchor.destination && item.position === anchor.position
+    )) === index
+  ));
+  if (uniqueAnchors.length === 1) {
+    return `往${uniqueAnchors[0].destination}·${uniqueAnchors[0].position}`;
+  }
+  if (uniqueAnchors.length > 1) {
+    return `双向·${uniqueValues(uniqueAnchors.map((anchor) => anchor.position)).join('／')}`;
+  }
+
+  const standalonePosition = location.match(/车头|车尾|中部|中间|两端/);
+  if (!standalonePosition) return '';
+  const position = standalonePosition[0] === '中间' ? '中部' : standalonePosition[0];
+  return `方向待确认·${position}`;
+}
+
+function deriveRestroomPresentation(record) {
+  const location = normalizeLocationText(record.locationRaw);
+  const accessSource = String(record.accessRaw || '');
+  const normalizedAccess = normalizeAccess(accessSource);
+  const hasInside = /费区内|闸内/.test(accessSource);
+  const hasOutside = /费区外|闸外/.test(accessSource)
+    || /(?:费区内|闸内)\s*[\/／、，,]\s*外/.test(accessSource);
+  const hasStationOutside = /车站外|站外/.test(accessSource);
+  const locationSaysOutside = /站外|[东南西北]?\d+号口外/.test(location);
+  const accessConflict = hasInside && !hasOutside && !hasStationOutside && locationSaysOutside;
+
+  let accessLabel = '闸区待确认';
+  let accessTone = 'unknown';
+  if (!accessConflict) {
+    if (hasStationOutside && hasOutside) {
+      accessLabel = '闸外／站外';
+      accessTone = 'outside';
+    } else if (hasStationOutside && hasInside) {
+      accessLabel = '闸内／站外';
+      accessTone = 'mixed';
+    } else if (hasInside && hasOutside) {
+      accessLabel = '闸内／闸外';
+      accessTone = 'mixed';
+    } else if (hasStationOutside || (!normalizedAccess && locationSaysOutside)) {
+      accessLabel = '站外';
+      accessTone = 'outside';
+    } else if (hasOutside) {
+      accessLabel = '闸外';
+      accessTone = 'outside';
+    } else if (hasInside) {
+      accessLabel = '闸内';
+      accessTone = 'inside';
+    }
+  }
+
+  const exitLabel = extractExitLabel(location);
+  const orientationLabel = extractOrientationLabel(location);
+  const hasPlatform = /站台|候车/.test(location);
+  let zoneLabel = '';
+  if (/换乘通道/.test(location)) zoneLabel = '换乘通道';
+  else if (hasPlatform && !orientationLabel && !exitLabel) zoneLabel = '站台';
+  const tags = [{ label: accessLabel, tone: accessTone }];
+  if (zoneLabel) tags.push({ label: zoneLabel, tone: 'neutral' });
+  if (orientationLabel || exitLabel) {
+    tags.push({ label: orientationLabel || exitLabel, tone: 'anchor' });
+  }
+  if (!location) tags.push({ label: '位置待补充', tone: 'unknown' });
+
+  return {
+    accessLabel,
+    accessConflict,
+    zoneLabel,
+    exitLabel,
+    orientationLabel,
+    wayfindingTags: tags.slice(0, 2),
+    wayfindingSummary: tags.slice(0, 2).map((tag) => tag.label).join('，'),
+    detailLocation: location,
+  };
+}
+
 function accessCategory(access) {
   if (access.indexOf('车站外') >= 0) return '车站外';
   if (access.indexOf('闸外') >= 0) return '闸外';
@@ -260,6 +399,7 @@ function restroomRecordsForStation(station) {
 
 function buildRestroom(record, originStationId, isReverse) {
   const access = normalizeAccess(record.accessRaw);
+  const presentation = deriveRestroomPresentation(record);
   const metrics = shortestMetrics(originStationId, record.lineStationId);
   const eta = estimateEta({
     segmentCount: metrics.segmentCount,
@@ -277,6 +417,14 @@ function buildRestroom(record, originStationId, isReverse) {
     access,
     accessRaw: record.accessRaw,
     facility: '厕所',
+    accessLabel: presentation.accessLabel,
+    accessConflict: presentation.accessConflict,
+    zoneLabel: presentation.zoneLabel,
+    exitLabel: presentation.exitLabel,
+    orientationLabel: presentation.orientationLabel,
+    wayfindingTags: presentation.wayfindingTags,
+    wayfindingSummary: presentation.wayfindingSummary,
+    detailLocation: presentation.detailLocation,
     sourceSheet: record.sourceSheet,
     sourceRow: record.sourceRow,
     etaLabel: eta.label,
@@ -296,19 +444,7 @@ function resolveInput(input) {
     : (allowedDirectionIds.includes(line.defaultDirection)
       ? line.defaultDirection
       : allowedDirectionIds[0]);
-  const routeConfirmed = line.type !== 'branched'
-    || line.routes.some((item) => item.id === request.routeId);
-  return { line, route, directionId, routeConfirmed };
-}
-
-function commonBranchStationNames(line, route) {
-  if (line.type !== 'branched' || line.routes.length < 2) return route.stationNames;
-  const otherRouteNames = line.routes
-    .filter((item) => item.id !== route.id)
-    .map((item) => new Set(item.stationNames));
-  return route.stationNames.filter((stationName) => (
-    otherRouteNames.every((stationNames) => stationNames.has(stationName))
-  ));
+  return { line, route, directionId };
 }
 
 const systemOriginRecord = findRecord('2', '人民广场');
@@ -344,16 +480,26 @@ function routeForRecord(line, record) {
   ))) || line.routes[0];
 }
 
-function getStationContext(stationId) {
+function getStationContext(stationId, preferred) {
   const record = recordById[stationId];
   if (!record || !browsableStationIds[stationId]) return null;
 
   const line = LINES[record.lineId];
-  const route = routeForRecord(line, record);
+  const normalizedName = normalizeStationName(record.stationName, record.lineId);
+  const matchingRoutes = line.routes.filter((route) => (route.stationNames || []).some(
+    (stationName) => normalizeStationName(stationName, line.id) === normalizedName,
+  ));
+  const preferredState = preferred || {};
+  const sameLine = preferredState.lineId === line.id;
+  const route = (sameLine && matchingRoutes.find((item) => item.id === preferredState.routeId))
+    || matchingRoutes.find((item) => item.id === line.defaultRouteId)
+    || matchingRoutes[0]
+    || routeForRecord(line, record);
   const directionIds = routeDirectionIds(line, route);
-  const direction = directionIds.includes(line.defaultDirection)
-    ? line.defaultDirection
-    : directionIds[0];
+  const keepsPreferredDirection = sameLine && directionIds.includes(preferredState.direction);
+  const direction = keepsPreferredDirection
+    ? preferredState.direction
+    : (directionIds.includes(line.defaultDirection) ? line.defaultDirection : directionIds[0]);
   return {
     lineStationId: stationId,
     lineId: line.id,
@@ -361,13 +507,16 @@ function getStationContext(stationId) {
     stationName: record.stationName,
     routeId: route.id,
     direction,
+    directionMode: keepsPreferredDirection && preferredState.directionMode === 'manual'
+      ? 'manual'
+      : 'default',
   };
 }
 
-function getLocationCandidateOptions(candidate) {
+function getLocationCandidateOptions(candidate, preferred) {
   const source = candidate || {};
   return (source.lineStationIds || []).map((stationId) => {
-    const context = getStationContext(stationId);
+    const context = getStationContext(stationId, preferred);
     return context && Object.assign({}, context, {
       physicalStationId: source.physicalStationId || '',
       distanceMeters: Number(source.distanceMeters) || 0,
@@ -414,13 +563,11 @@ function buildHomeView(input) {
     resolved.route,
     resolved.directionId,
   );
-  const visibleRoute = resolved.routeConfirmed
-    ? resolved.route
-    : Object.assign({}, resolved.route, {
-      stationNames: commonBranchStationNames(resolved.line, resolved.route),
-    });
-  const stations = routeStations(resolved.line, visibleRoute, false);
+  const stations = routeStations(resolved.line, resolved.route, false);
   if (reverseRoute) stations.reverse();
+  const alternateRoute = resolved.line.type === 'branched'
+    ? resolved.line.routes.find((route) => route.id !== resolved.route.id)
+    : null;
 
   const requestedOriginId = input && input.originStationId;
   const originStationId = resolveStationId(requestedOriginId);
@@ -466,14 +613,18 @@ function buildHomeView(input) {
       hasRestroom: restrooms.length > 0,
       isOrigin: station.id === originStationId,
       dataState: station.record ? 'available' : 'unavailable',
+      branchHint: alternateRoute && station.name === resolved.route.splitStationName
+        ? {
+          routeId: alternateRoute.id,
+          terminalName: alternateRoute.terminalName,
+          actionLabel: getBranchTrackActionLabel(
+            alternateRoute.branchRole,
+            alternateRoute.terminalName,
+          ),
+        }
+        : null,
     };
   });
-
-  let directionLabel = resolved.routeConfirmed ? direction.label : '支线待确认';
-  if (resolved.line.type === 'loop' && stations.length) {
-    const nextIndex = (currentIndex + 1) % stations.length;
-    directionLabel = `${direction.label} · 下一站${stations[nextIndex].name}`;
-  }
 
   return {
     line: {
@@ -481,11 +632,11 @@ function buildHomeView(input) {
       name: resolved.line.name,
       color: resolved.line.color,
       type: resolved.line.type,
-      routeId: resolved.routeConfirmed ? resolved.route.id : '',
+      routeId: resolved.route.id,
       routeName: routeLabel(resolved.route),
     },
     direction: resolved.directionId,
-    directionLabel,
+    directionLabel: direction.label,
     originStationId,
     originStationName: originRecord ? originRecord.stationName : '人民广场',
     stations: viewStations,

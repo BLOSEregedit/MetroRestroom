@@ -2,6 +2,7 @@ const STORAGE_KEYS = Object.freeze({
   preferences: "metroRestroom:preferences",
   recentRecords: "metroRestroom:recentRecords",
   lastLocationStation: "metroRestroom:lastLocationStation",
+  stationLineChoices: "metroRestroom:stationLineChoices",
   correctionDraft: "metroRestroom:correctionDraft",
   lineSyncPrefix: "metroRestroom:lineSync",
   citySyncPrefix: "metroRestroom:citySync",
@@ -334,6 +335,38 @@ function clearLastLocationStation() {
   return null;
 }
 
+function getStationLineChoices() {
+  const stored = readStorage(STORAGE_KEYS.stationLineChoices);
+  return isPlainObject(stored) ? cloneValue(stored) : {};
+}
+
+function getStationLineChoice(physicalStationId) {
+  const stationId = normalizeStorageId(physicalStationId, "physicalStationId");
+  const choice = getStationLineChoices()[stationId];
+  return isPlainObject(choice) && choice.lineStationId
+    ? cloneValue(choice)
+    : null;
+}
+
+function saveStationLineChoice(physicalStationId, choice) {
+  const stationId = normalizeStorageId(physicalStationId, "physicalStationId");
+  if (!isPlainObject(choice) || !choice.lineStationId) {
+    throw new TypeError("换乘站线路偏好必须包含 lineStationId");
+  }
+  const choices = getStationLineChoices();
+  choices[stationId] = {
+    lineStationId: normalizeStorageId(choice.lineStationId, "lineStationId"),
+    chosenAt: Number(choice.chosenAt) || Date.now(),
+  };
+  writeStorage(STORAGE_KEYS.stationLineChoices, choices);
+  return cloneValue(choices[stationId]);
+}
+
+function clearStationLineChoices() {
+  removeStorage(STORAGE_KEYS.stationLineChoices);
+  return {};
+}
+
 function getCorrectionDraft() {
   const stored = readStorage(STORAGE_KEYS.correctionDraft);
   return isPlainObject(stored) ? Object.assign({}, stored) : null;
@@ -365,6 +398,9 @@ module.exports = {
   getLastLocationStation,
   saveLastLocationStation,
   clearLastLocationStation,
+  getStationLineChoice,
+  saveStationLineChoice,
+  clearStationLineChoices,
   getCorrectionDraft,
   saveCorrectionDraft,
   clearCorrectionDraft,

@@ -4,9 +4,26 @@ const {
   getRecentRecords,
   savePreferences,
 } = require("../../utils/storage");
+const {
+  formatDateTime,
+  getSyncStatus,
+  subscribeSyncState,
+  syncLines,
+} = require('../../utils/data-sync');
 const stationLocationData = require("../../data/station-locations");
 
 const COLLAPSED_RECENT_COUNT = 5;
+const SYNC_CITY_ID = 'shanghai';
+const SYNC_BUNDLE_SCHEMA = 1;
+
+function formatCompactSyncTime(timestamp, nowMs) {
+  const formatted = formatDateTime(timestamp);
+  if (!formatted) return '';
+  const current = formatDateTime(nowMs || Date.now());
+  return current && current.slice(0, 4) === formatted.slice(0, 4)
+    ? formatted.slice(5)
+    : formatted;
+}
 
 const physicalStationByLineStationId = Object.create(null);
 (stationLocationData.stations || []).forEach((station) => {
@@ -45,6 +62,8 @@ Page({
     recentRecords: [],
     recentTotal: 0,
     recentExpanded: false,
+    syncTone: 'blue',
+    syncMessage: '本地数据 · 尚未同步',
   },
   onShow() {
     const preferences = getPreferences();
@@ -56,6 +75,51 @@ Page({
       recentExpanded: false,
       recentRecords: this._allRecentRecords.slice(0, COLLAPSED_RECENT_COUNT),
     });
+    if (!this._unsubscribeSync) {
+      this._unsubscribeSync = subscribeSyncState((event) => {
+        if (event.cityId === SYNC_CITY_ID) this._updateSyncStatus();
+      });
+    }
+    this._updateSyncStatus();
+    const app = getApp();
+    if (app.globalData.cloudReady) {
+      syncLines(this._syncLineIds(), {
+        mode: 'auto',
+        cityId: SYNC_CITY_ID,
+        bundleSchema: SYNC_BUNDLE_SCHEMA,
+      }).then(() => this._updateSyncStatus());
+    }
+  },
+  onUnload() {
+    if (this._unsubscribeSync) this._unsubscribeSync();
+    this._unsubscribeSync = null;
+  },
+  _syncLineIds() {
+    const lineIds = getApp().globalData.activeSyncLineIds;
+    return Array.isArray(lineIds) && lineIds.length ? lineIds : ['2'];
+  },
+  _updateSyncStatus() {
+    const status = getSyncStatus(this._syncLineIds(), {
+      cityId: SYNC_CITY_ID,
+      bundleSchema: SYNC_BUNDLE_SCHEMA,
+    });
+    const presentation = this._buildSyncPresentation(status);
+    this.setData({
+      syncTone: presentation.tone,
+      syncMessage: presentation.message,
+    });
+  },
+  _buildSyncPresentation(status, nowMs) {
+    const input = status || {};
+    const isFresh = input.tone === 'green'
+      || (input.phase === 'checking' && this.data.syncTone === 'green');
+    const timeLabel = formatCompactSyncTime(input.lastAlignedAt, nowMs);
+    return {
+      tone: isFresh ? 'green' : 'blue',
+      message: isFresh
+        ? `已同步${timeLabel ? ` · ${timeLabel}` : ''}`
+        : `本地数据${timeLabel ? ` · 上次 ${timeLabel}` : ' · 尚未同步'}`,
+    };
   },
   onToggleRecent() {
     const expanded = !this.data.recentExpanded;

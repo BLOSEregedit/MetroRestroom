@@ -8,12 +8,19 @@
 .empty-title { margin-top: 16rpx; font-size: 30rpx; }
 .empty-description, .setting-description { color: #999; font-size: 24rpx; }
 .empty-description { margin-top: 10rpx; }
-.setting-row, .about-row, .correction-row { display: flex; align-items: center; justify-content: space-between; }
+.setting-row, .about-row, .correction-row, .sync-row { display: flex; align-items: center; justify-content: space-between; }
 .setting-row { min-height: 112rpx; padding: 0 28rpx; }
 .setting-title { font-size: 29rpx; }
 .divider { height: 1rpx; margin: 0 28rpx; background: #eee; }
 .about-row { padding: 28rpx; }
 .correction-row { padding: 28rpx; }
+.sync-row { min-height: 100rpx; box-sizing: border-box; padding: 0 28rpx; }
+.sync-value { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: flex-end; gap: 10rpx; margin-left: 20rpx; color: #77808a; font-size: 22rpx; text-align: right; }
+.sync-value__message { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sync-value__dot { width: 12rpx; height: 12rpx; flex: none; border-radius: 50%; background: #77808a; }
+.sync-value--green { color: #247f56; }
+.sync-value--green .sync-value__dot { background: #29a36a; }
+.sync-value--blue .sync-value__dot { background: #007aff; }
 .recent-card { overflow: hidden; }
 .recent-row { display: flex; min-height: 108rpx; align-items: center; justify-content: space-between; padding: 0 28rpx; border-bottom: 1rpx solid #eee; }
 .recent-row:last-child { border-bottom: 0; }

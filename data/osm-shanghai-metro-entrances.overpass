@@ -1,0 +1,11 @@
+[out:json][timeout:240];
+area["ISO3166-2"="CN-SH"]["admin_level"="4"]->.shanghai;
+node(area.shanghai)["railway"="subway_entrance"]->.entrances;
+rel(bn.entrances)["public_transport"="stop_area"]->.stop_areas;
+rel(area.shanghai)["type"="route"]["route"~"^(subway|light_rail)$"]->.routes;
+(
+  .entrances;
+  .stop_areas;
+  .routes;
+);
+out body qt;
