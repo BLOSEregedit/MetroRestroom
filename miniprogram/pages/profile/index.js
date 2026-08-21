@@ -11,6 +11,7 @@ const {
   syncLines,
 } = require('../../utils/data-sync');
 const stationLocationData = require("../../data/station-locations");
+const { normalizeFacilityTerms } = require('../../utils/display-copy');
 
 const COLLAPSED_RECENT_COUNT = 5;
 const SYNC_CITY_ID = 'shanghai';
@@ -51,7 +52,7 @@ function formatRecentRecords(records) {
   return records.map((record) => Object.assign({}, record, {
     lineName: record.lineName || `${record.lineId}号线`,
     stationName: record.stationName || record.stationId,
-    action: record.action || "浏览",
+    action: normalizeFacilityTerms(record.action || "浏览"),
   }));
 }
 

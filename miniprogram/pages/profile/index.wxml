@@ -1,6 +1,6 @@
 <view class="profile-page">
   <view class="section-heading"><view class="section-title">最近记录</view><text wx:if="{{recentRecords.length}}" class="clear-action" bindtap="onClearRecent">清空</text></view>
-  <view wx:if="{{!recentRecords.length}}" class="empty-card"><view class="empty-icon">⌁</view><view class="empty-title">还没有最近记录</view><view class="empty-description">设置锚点或查看厕所信息后，会显示在这里</view></view>
+  <view wx:if="{{!recentRecords.length}}" class="empty-card"><view class="empty-icon">⌁</view><view class="empty-title">还没有最近记录</view><view class="empty-description">设置锚点或查看卫生间信息后，会显示在这里</view></view>
   <view wx:else class="settings-card recent-card">
     <view wx:for="{{recentRecords}}" wx:key="stationId" class="recent-row" data-index="{{index}}" bindtap="onOpenRecent">
       <view><view class="setting-title">{{item.stationName}}</view><view class="setting-description">{{item.lineName}} · {{item.action}}</view></view><view class="chevron">›</view>
@@ -23,7 +23,7 @@
     </view>
   </view>
   <view class="section-title">数据纠错</view>
-  <view class="settings-card correction-row" bindtap="onOpenCorrection"><view><view class="setting-title">反馈数据问题</view><view class="setting-description">纠正厕所位置、闸内外或设施信息</view></view><view class="chevron">›</view></view>
+  <view class="settings-card correction-row" bindtap="onOpenCorrection"><view><view class="setting-title">反馈数据问题</view><view class="setting-description">纠正卫生间位置、闸内外或设施信息</view></view><view class="chevron">›</view></view>
   <view class="section-title">关于</view>
   <view class="settings-card">
     <view class="about-row" bindtap="openAbout"><view><view class="setting-title">关于 Metro 洗手间</view><view class="setting-description">数据来源与版本信息</view></view><view class="chevron">›</view></view>

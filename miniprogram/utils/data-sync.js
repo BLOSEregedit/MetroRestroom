@@ -57,10 +57,10 @@ function normalizeStatusOverride(value, lineId) {
   }
   const restroomId = typeof value.restroomId === 'string' ? value.restroomId.trim() : '';
   if (!restroomId || restroomId.length > 80 || !SAFE_ID_PATTERN.test(restroomId)) {
-    throw createSyncError('INVALID_SYNC_RESPONSE', `线路 ${lineId} 的厕所 ID 不正确`);
+    throw createSyncError('INVALID_SYNC_RESPONSE', `线路 ${lineId} 的卫生间 ID 不正确`);
   }
   if (!RESTROOM_STATUSES.has(value.restroomStatus)) {
-    throw createSyncError('INVALID_SYNC_RESPONSE', `线路 ${lineId} 的厕所状态不正确`);
+    throw createSyncError('INVALID_SYNC_RESPONSE', `线路 ${lineId} 的卫生间状态不正确`);
   }
 
   const normalized = { restroomId, restroomStatus: value.restroomStatus };
@@ -464,7 +464,7 @@ class DataSyncManager {
       const overrides = line.overrides.map((override) => {
         const normalized = normalizeStatusOverride(override, lineId);
         if (seenRestroomIds.has(normalized.restroomId)) {
-          throw createSyncError('INVALID_SYNC_RESPONSE', `线路 ${lineId} 的厕所状态重复`);
+          throw createSyncError('INVALID_SYNC_RESPONSE', `线路 ${lineId} 的卫生间状态重复`);
         }
         seenRestroomIds.add(normalized.restroomId);
         return normalized;

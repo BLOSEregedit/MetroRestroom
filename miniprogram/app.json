@@ -26,7 +26,7 @@
   },
   "permission": {
     "scope.userLocation": {
-      "desc": "用于判断你附近的地铁站，便于展示厕所信息"
+      "desc": "用于判断你附近的地铁站，便于展示卫生间信息"
     }
   },
   "requiredPrivateInfos": ["getLocation"],

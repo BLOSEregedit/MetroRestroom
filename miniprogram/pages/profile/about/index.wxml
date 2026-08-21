@@ -1,7 +1,6 @@
 <view class="about-page">
   <image class="about-mark" src="/images/logo.png" mode="aspectFit" />
   <view class="about-title">Metro 洗手间</view>
-  <view class="about-subtitle">地铁厕所查询</view>
 
   <view class="about-card">
     <view wx:if="{{version}}" class="info-row">
@@ -11,6 +10,29 @@
     <view class="info-row">
       <text>数据说明</text>
       <text class="info-value">信息仅供出行参考</text>
+    </view>
+  </view>
+
+  <view class="privacy-card">
+    <view class="privacy-title">隐私与数据</view>
+    <text class="privacy-summary">日常查询不要求注册或登录，也不主动收集姓名、手机号等个人信息。打开即用，用完即走。</text>
+    <view class="privacy-list">
+      <view class="privacy-item">
+        <view class="privacy-item__title">基础数据保存在本地</view>
+        <text class="privacy-item__copy">线路、站点和卫生间基础数据全部随小程序保存在本地，断网也可以查询；偏好、最近记录和定位匹配结果只保存在本机。</text>
+      </view>
+      <view class="privacy-item">
+        <view class="privacy-item__title">定位由你决定</view>
+        <text class="privacy-item__copy">仅在你主动使用“智能定位”时申请 GPS 定位权限，只用于在本机匹配附近站点；不授权也可以手动选择线路和站点。</text>
+      </view>
+      <view class="privacy-item">
+        <view class="privacy-item__title">只在主动纠错时提交</view>
+        <text class="privacy-item__copy">只有你主动提交站点纠错时，才会上传你填写的反馈、对应线路、站点和卫生间信息，以及你自愿填写的联系方式。</text>
+      </view>
+      <view class="privacy-item">
+        <view class="privacy-item__title">匿名防止重复与滥用</view>
+        <text class="privacy-item__copy">云端会将微信自动提供的匿名用户标识转换为不可逆哈希，仅用于防止重复提交和滥用，不保存原始 OPENID。</text>
+      </view>
     </view>
   </view>
 

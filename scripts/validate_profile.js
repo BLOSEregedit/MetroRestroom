@@ -4,6 +4,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const catalog = require('../miniprogram/data/catalog');
+const { getCorrectionOptions } = require('../miniprogram/data/correction-options');
 const storage = require('../miniprogram/utils/storage');
 
 let pageDefinition = null;
@@ -77,7 +78,7 @@ assert.strictEqual(storage.getStationLineChoice('physical-people-square'), null)
 const zhenpingLine3 = findStation('3', '镇坪路');
 storage.addRecentRecord({
   lineId: '3', lineName: '3号线', stationId: zhenpingLine3.id,
-  stationName: '镇坪路', direction: 'forward', routeId: 'l3-main', action: '查看厕所',
+  stationName: '镇坪路', direction: 'forward', routeId: 'l3-main', action: '查看卫生间',
 });
 const nanjingWest = findStation('2', '南京西路');
 storage.addRecentRecord({
@@ -94,6 +95,7 @@ page.onShow();
 assert.strictEqual(page.data.recentRecords.length, 2, '同线路同站重复访问不得重复展示');
 assert.strictEqual(page.data.recentRecords[0].stationName, '镇坪路', '最新一次访问应置顶');
 assert.strictEqual(page.data.recentRecords[0].action, '设置起点', '置顶记录应携带最新操作');
+assert.strictEqual(page.data.recentRecords[1].action, '查看卫生间', '旧版最近记录不得继续显示“厕所”');
 assert.strictEqual(page.data.recentTotal, 2);
 
 // 场景二：同一物理站跨线路访问只保留最新线路上下文。
@@ -113,11 +115,11 @@ assert.strictEqual(page.data.recentRecords[1].stationName, '南京西路');
 // 场景三：未知 stationId 回退到线路站去重，避免误合并。
 storage.addRecentRecord({
   lineId: '4', lineName: '4号线', stationId: 'l4-pudianlu',
-  stationName: '浦电路', direction: 'forward', routeId: 'l4-loop', action: '查看厕所',
+  stationName: '浦电路', direction: 'forward', routeId: 'l4-loop', action: '查看卫生间',
 });
 storage.addRecentRecord({
   lineId: '6', lineName: '6号线', stationId: 'l6-pudianlu',
-  stationName: '浦电路', direction: 'forward', routeId: 'l6-main', action: '查看厕所',
+  stationName: '浦电路', direction: 'forward', routeId: 'l6-main', action: '查看卫生间',
 });
 
 page = createPage();
@@ -134,7 +136,7 @@ storage.clearRecentRecords();
   const station = findStation('2', name);
   storage.addRecentRecord({
     lineId: '2', lineName: '2号线', stationId: station.id,
-    stationName: station.name, direction: 'forward', routeId: 'l2-main', action: '查看厕所',
+    stationName: station.name, direction: 'forward', routeId: 'l2-main', action: '查看卫生间',
   });
 });
 
@@ -222,7 +224,7 @@ delete require.cache[aboutPagePath];
 require(aboutPagePath);
 assert(pageDefinition, '关于页 Page 配置未加载');
 assert.strictEqual(pageDefinition.onRefreshSync, undefined, '关于页不得保留手动数据检查入口');
-assert.strictEqual(pageDefinition._buildSyncPresentation, undefined, '关于页不得继续承载厕所数据同步状态');
+assert.strictEqual(pageDefinition._buildSyncPresentation, undefined, '关于页不得继续承载卫生间数据同步状态');
 
 const aboutPage = createPage();
 aboutPage.onLoad();
@@ -242,7 +244,22 @@ const aboutWxss = fs.readFileSync(
   'utf8',
 );
 assert(aboutWxml.includes('src="/images/logo.png"'), '关于页必须展示小程序正式 Logo');
-assert(aboutWxml.includes('>地铁厕所查询</view>'), '关于页产品说明不得绑定首发城市');
+assert(!aboutWxml.includes('about-subtitle'), '关于页标题下不得保留重复产品副标题');
+assert(aboutWxml.includes('<view class="privacy-title">隐私与数据</view>'), '关于页必须提供独立隐私与数据模块');
+assert(aboutWxml.includes('日常查询不要求注册或登录'), '隐私模块必须说明无需登录和日常查询不主动采集个人信息');
+assert(aboutWxml.includes('打开即用，用完即走'), '隐私模块必须说明轻量工具的使用方式');
+assert(aboutWxml.includes('基础数据全部随小程序保存在本地'), '隐私模块必须说明基础数据保存在本地');
+assert(aboutWxml.includes('只用于在本机匹配附近站点'), '隐私模块必须说明定位用途和处理位置');
+assert(aboutWxml.includes('也可以手动选择线路和站点'), '隐私模块必须说明拒绝定位后的手动方案');
+assert(aboutWxml.includes('只有你主动提交站点纠错时'), '隐私模块必须说明纠错是唯一主动上传入口');
+assert(aboutWxml.includes('自愿填写的联系方式'), '隐私模块必须说明联系方式仅在用户自愿填写时上传');
+assert(aboutWxml.includes('不可逆哈希'), '隐私模块必须如实说明匿名防滥用处理');
+assert(aboutWxml.includes('不保存原始 OPENID'), '隐私模块必须说明不保存原始微信身份标识');
+assert(!aboutWxml.includes('厕所'), '关于页不得向用户显示“厕所”');
+assert(!profileWxml.includes('厕所'), '个人页不得向用户显示“厕所”');
+getCorrectionOptions().forEach((line) => line.stations.forEach((station) => {
+  assert(!station.location.includes('厕所'), `${line.name}${station.name}纠错上下文不得显示“厕所”`);
+}));
 assert(aboutWxml.includes('wx:if="{{version}}"'), '关于页版本行必须只在真实版本号可用时显示');
 assert(aboutWxml.includes('<text>版本</text>'), '关于页版本标签必须保持简洁');
 assert(!aboutWxml.includes('开发版'), '关于页不得显示开发版占位');
@@ -251,6 +268,7 @@ assert(!aboutWxml.includes('检查最新数据'), '关于页不得展示检查�
 assert(!aboutWxml.includes('bindtap="onRefreshSync"'), '关于页不得展示手动数据检查按钮');
 assert(!aboutWxml.includes('作者寄语'), '原关于页不得混入作者寄语');
 assert(!aboutWxss.includes('.developer-card'), '原关于页不得残留开发者说明样式');
+assert(/\.privacy-item__copy\s*\{[^}]*font-size:\s*24rpx[^}]*line-height:\s*1\.7/.test(aboutWxss), '隐私说明必须使用适合移动端阅读的字号与行距');
 assert(aboutWxml.includes('bindtap="onBack"'), '关于页必须提供明确的返回操作');
 assert(aboutWxml.includes('aria-label="返回我的"'), '关于页返回操作必须提供读屏名称');
 
@@ -265,6 +283,7 @@ const appConfig = JSON.parse(fs.readFileSync(
   path.resolve(__dirname, '../miniprogram/app.json'),
   'utf8',
 ));
+assert(!appConfig.permission['scope.userLocation'].desc.includes('厕所'), '定位授权说明不得混用“厕所”');
 assert(appConfig.pages.includes('pages/profile/developer-note/index'), '作者寄语页必须注册到小程序路由');
 const developerWxml = fs.readFileSync(
   path.resolve(__dirname, '../miniprogram/pages/profile/developer-note/index.wxml'),

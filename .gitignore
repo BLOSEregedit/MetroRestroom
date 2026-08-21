@@ -7,3 +7,5 @@ miniprogram_npm/
 dist/
 .codex/
 .agents/
+outputs/**/previews/
+outputs/**/*.inspect.ndjson

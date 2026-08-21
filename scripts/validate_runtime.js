@@ -3,6 +3,7 @@
 const assert = require('assert');
 const catalog = require('../miniprogram/data/catalog');
 const restroomData = require('../miniprogram/data/generated/restrooms');
+const { normalizeFacilityTerms } = require('../miniprogram/utils/display-copy');
 
 const lineOptions = catalog.getLineOptions();
 assert.strictEqual(lineOptions.length, 19, '运行时必须暴露 19 条线路');
@@ -58,9 +59,12 @@ lineOptions.forEach((line) => {
           }
           assert.strictEqual(
             restroom.detailLocation,
-            String(restroom.locationRaw || '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim(),
-            `${restroom.id} 完整位置描述不得在展示派生中丢失`,
+            normalizeFacilityTerms(restroom.locationRaw).replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim(),
+            `${restroom.id} 完整位置描述除用户术语归一外不得丢失`,
           );
+          assert(!restroom.location.includes('厕所'), `${restroom.id} 位置摘要不得显示“厕所”`);
+          assert(!restroom.detailLocation.includes('厕所'), `${restroom.id} 完整位置不得显示“厕所”`);
+          assert.strictEqual(restroom.facility, '卫生间', `${restroom.id} 设施名称必须统一为“卫生间”`);
         });
       });
     });

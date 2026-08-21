@@ -100,7 +100,7 @@
               <view class="transfer-list" aria-hidden="true"><view wx:for="{{station.transferLineOptions}}" wx:for-item="transferLine" wx:key="lineId" class="transfer-pill" style="border-color: {{transferLine.lineColor}}; color: {{transferLine.lineTextColor}};"><text>{{transferLine.lineName}}</text></view></view>
             </view>
             <view class="unavailable-message"><text class="unavailable-mark">!</text><text>数据暂不可用</text></view>
-            <text class="unavailable-tip">请稍后重试，不将其视为无厕所</text>
+            <text class="unavailable-tip">请稍后重试，不将其视为无卫生间</text>
           </view>
           <view wx:elif="{{station.hasRestroom}}" class="station-card {{station.showReverse ? 'station-card--reverse' : ''}}" data-station-id="{{station.id}}" bindtap="onOpenRestroomDrawer" hover-class="station-card--pressed" hover-start-time="0" hover-stay-time="80">
             <view class="station-card__accessible-detail" role="button" aria-label="{{station.restroomAriaLabel}}" data-station-id="{{station.id}}" catchtap="onOpenRestroomDrawer"></view>
@@ -112,7 +112,7 @@
             <view wx:else class="restroom-facts"><view class="restroom-facts__tags"><text wx:for="{{station.primaryRestroom.wayfindingTags}}" wx:for-item="tag" wx:key="label" class="restroom-fact restroom-fact--{{tag.tone}}">{{tag.label}}</text></view><text class="eta-label restroom-facts__eta" style="color: {{lineTextColor}};">{{station.primaryRestroom.etaLabel}}</text></view>
           </view>
           <view wx:else class="empty-station-card">
-            <view class="empty-station-card__header"><text class="station-name">{{station.name}}</text><text class="empty-text">暂无厕所记录</text></view>
+            <view class="empty-station-card__header"><text class="station-name">{{station.name}}</text><text class="empty-text">暂无卫生间记录</text></view>
             <view wx:if="{{station.transferLineOptions.length > 1}}" class="transfer-strip" role="text" aria-label="{{station.transferSummaryAriaLabel}}">
               <view class="transfer-list" aria-hidden="true"><view wx:for="{{station.transferLineOptions}}" wx:for-item="transferLine" wx:key="lineId" class="transfer-pill" style="border-color: {{transferLine.lineColor}}; color: {{transferLine.lineTextColor}};"><text>{{transferLine.lineName}}</text></view></view>
             </view>

@@ -1245,7 +1245,8 @@ assert(homepageJs.includes("hasMultipleRestroomRecords ? '卫生间 · 多处' :
 assert(!homepageWxml.includes('>WC</text>'), '卫生间胶囊不得继续使用 WC 文案');
 assert(!homepageWxml.includes('restroomActionLabel'), '卫生间胶囊不得继续拼接旧的多个位置文案');
 assert(!homepageWxml.includes('wc-status'), '卫生间胶囊不得残留旧 WC 样式结构');
-assert(homepageWxml.includes('<text class="empty-text">暂无厕所记录</text>'), '暂无记录卡必须保留准确的文字状态');
+assert(homepageWxml.includes('<text class="empty-text">暂无卫生间记录</text>'), '暂无记录卡必须保留准确的文字状态');
+assert(!homepageWxml.includes('厕所'), '首页模板不得向用户显示“厕所”');
 assert(homepageWxml.includes('station.primaryRestroom.wayfindingTags'), '主卡必须改用结构化导视标签');
 assert(!homepageWxml.includes('共 {{station.restroomCount}} 处'), '线路位置记录数不得冒充物理厕所数量');
 assert(!homepageWxml.includes('共 {{drawerRestrooms.length}} 处厕所'), '抽屉不得把线路位置记录数冒充物理厕所数量');

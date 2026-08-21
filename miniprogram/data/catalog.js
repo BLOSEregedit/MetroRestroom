@@ -4,8 +4,20 @@ const {
   canGenerateSameNameTransfer,
   normalizeStationName,
 } = require('./topology');
-const { estimateEta } = require('../utils/eta');
+const { ETA_DEFAULTS, estimateEta } = require('../utils/eta');
 const { getPreferences, getLastLocationStation } = require('../utils/storage');
+const { normalizeFacilityTerms } = require('../utils/display-copy');
+
+let segmentTimeData = {};
+try {
+  // 时分数据由离线脚本生成；开发期缺失时继续使用 ETA_DEFAULTS，避免阻塞本地查询。
+  segmentTimeData = require('./generated/segment-times');
+} catch (error) {
+  if (!error || error.code !== 'MODULE_NOT_FOUND'
+    || String(error.message || '').indexOf('segment-times') < 0) {
+    throw error;
+  }
+}
 
 const records = restroomData.lines.reduce(
   (result, line) => result.concat(line.records || []),
@@ -138,120 +150,429 @@ function getLineOptions() {
 }
 
 const graph = Object.create(null);
+const routeInfoById = Object.create(null);
 
-function addGraphEdge(from, to, kind) {
+function ensureGraphStation(stationId) {
+  if (!graph[stationId]) graph[stationId] = [];
+}
+
+function addTrainGraphEdge(from, to, lineId, routeId) {
   if (!from || !to || from === to) return;
-  if (!graph[from]) graph[from] = [];
-  if (!graph[to]) graph[to] = [];
-  if (!graph[from].some((edge) => edge.to === to && edge.kind === kind)) {
-    graph[from].push({ to, kind });
-    graph[to].push({ to: from, kind });
+  ensureGraphStation(from);
+  ensureGraphStation(to);
+  const forward = graph[from].find((edge) => edge.to === to && edge.kind === 'train');
+  const backward = graph[to].find((edge) => edge.to === from && edge.kind === 'train');
+  if (forward) {
+    if (!forward.routeIds.includes(routeId)) forward.routeIds.push(routeId);
+    if (!backward.routeIds.includes(routeId)) backward.routeIds.push(routeId);
+    return;
   }
+  graph[from].push({ to, kind: 'train', lineId, routeIds: [routeId] });
+  graph[to].push({ to: from, kind: 'train', lineId, routeIds: [routeId] });
+}
+
+function addTransferGraphEdge(from, to) {
+  if (!from || !to || from === to) return;
+  ensureGraphStation(from);
+  ensureGraphStation(to);
+  if (graph[from].some((edge) => edge.to === to && edge.kind === 'transfer')) return;
+  graph[from].push({ to, kind: 'transfer' });
+  graph[to].push({ to: from, kind: 'transfer' });
 }
 
 Object.keys(LINES).forEach((lineId) => {
   const line = LINES[lineId];
   line.routes.forEach((route) => {
     const stations = routeStations(line, route, true);
+    const activeStations = stations.filter((station) => (
+      station.record && station.status === 'active' && station.record.status === 'active'
+    ));
+    routeInfoById[route.id] = {
+      line,
+      route,
+      stationIds: activeStations.map((station) => station.id),
+    };
     stations.forEach((station) => {
       if (station.record && station.status === 'active' && station.record.status === 'active') {
         browsableStationIds[station.id] = true;
       }
     });
-    for (let index = 0; index < stations.length - 1; index += 1) {
-      addGraphEdge(stations[index].id, stations[index + 1].id, 'train');
+    for (let index = 0; index < activeStations.length - 1; index += 1) {
+      addTrainGraphEdge(
+        activeStations[index].id,
+        activeStations[index + 1].id,
+        line.id,
+        route.id,
+      );
     }
-    if (route.closed && stations.length > 2) {
-      addGraphEdge(stations[stations.length - 1].id, stations[0].id, 'train');
+    if (route.closed && activeStations.length > 2) {
+      addTrainGraphEdge(
+        activeStations[activeStations.length - 1].id,
+        activeStations[0].id,
+        line.id,
+        route.id,
+      );
     }
   });
 });
 
 Object.keys(transferTargetsById).forEach((fromId) => {
-  transferTargetsById[fromId].forEach((toId) => addGraphEdge(fromId, toId, 'transfer'));
+  transferTargetsById[fromId].forEach((toId) => addTransferGraphEdge(fromId, toId));
 });
 
-function shortestMetrics(originId, targetId) {
-  if (!recordById[originId] || !recordById[targetId]) {
-    return {
-      stationIds: [],
-      lineIds: [],
-      transferStationIds: [],
-      segmentCount: 0,
-      transferCount: 0,
-    };
+function secondsValue(value, fallback) {
+  if (value && typeof value === 'object') {
+    const objectValue = value.seconds !== undefined
+      ? value.seconds
+      : (value.travelSeconds !== undefined ? value.travelSeconds : value.headwaySeconds);
+    const seconds = Number(objectValue);
+    return Number.isFinite(seconds) && seconds >= 0 ? seconds : fallback;
   }
-  if (originId === targetId) {
-    return {
-      stationIds: [originId],
-      lineIds: [recordById[originId].lineId],
-      transferStationIds: [],
-      segmentCount: 0,
-      transferCount: 0,
-    };
-  }
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : fallback;
+}
 
-  const distances = Object.create(null);
+function defaultTimeSeconds(key, fallback) {
+  const defaults = segmentTimeData.defaults || segmentTimeData.defaultSeconds || {};
+  return secondsValue(defaults[key], fallback);
+}
+
+function medianSeconds(values) {
+  const sorted = values.filter((value) => Number.isFinite(value) && value > 0)
+    .sort((left, right) => left - right);
+  if (!sorted.length) return null;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2
+    ? sorted[middle]
+    : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function buildLineSegmentMedians(values) {
+  const secondsByLineId = Object.create(null);
+  Object.keys(values).forEach((key) => {
+    const fromId = key.split('>')[0];
+    const record = recordById[fromId];
+    const seconds = secondsValue(values[key], NaN);
+    if (!record || !Number.isFinite(seconds) || seconds <= 0) return;
+    if (!secondsByLineId[record.lineId]) secondsByLineId[record.lineId] = [];
+    secondsByLineId[record.lineId].push(seconds);
+  });
+  return Object.keys(secondsByLineId).reduce((result, lineId) => {
+    result[lineId] = medianSeconds(secondsByLineId[lineId]);
+    return result;
+  }, Object.create(null));
+}
+
+const directedSegmentValues = segmentTimeData.segments
+  || segmentTimeData.directedSegments
+  || segmentTimeData.segmentSecondsByDirection
+  || {};
+const lineSegmentMedianSeconds = buildLineSegmentMedians(directedSegmentValues);
+
+function directedSegmentSeconds(fromId, toId) {
+  const key = `${fromId}>${toId}`;
+  const exactSeconds = secondsValue(directedSegmentValues[key], NaN);
+  if (Number.isFinite(exactSeconds) && exactSeconds > 0) return exactSeconds;
+  const fromRecord = recordById[fromId];
+  const lineMedian = fromRecord && lineSegmentMedianSeconds[fromRecord.lineId];
+  return Number.isFinite(lineMedian) && lineMedian > 0
+    ? lineMedian
+    : defaultTimeSeconds('segmentSeconds', ETA_DEFAULTS.segmentSeconds);
+}
+
+function serviceHeadwaySeconds(lineId, routeId, directionId) {
+  const values = segmentTimeData.headways
+    || segmentTimeData.headwaySecondsByService
+    || {};
+  const keys = [
+    `${lineId}:${routeId}:${directionId}`,
+    `${lineId}:${directionId}`,
+    `${lineId}:${routeId}`,
+    lineId,
+  ];
+  for (let index = 0; index < keys.length; index += 1) {
+    if (values[keys[index]] !== undefined) {
+      return secondsValue(values[keys[index]], ETA_DEFAULTS.headwaySeconds);
+    }
+  }
+  return defaultTimeSeconds('headwaySeconds', ETA_DEFAULTS.headwaySeconds);
+}
+
+function transferWalkSeconds(fromId, toId) {
+  const values = segmentTimeData.transferWalkSeconds
+    || segmentTimeData.transferWalks
+    || {};
+  return secondsValue(
+    values[`${fromId}>${toId}`] !== undefined
+      ? values[`${fromId}>${toId}`]
+      : values[`${toId}>${fromId}`],
+    defaultTimeSeconds('transferWalkSeconds', ETA_DEFAULTS.transferWalkSeconds),
+  );
+}
+
+function routeStepDirection(routeInfo, fromId, toId) {
+  const ids = routeInfo.stationIds;
+  const fromIndex = ids.indexOf(fromId);
+  const toIndex = ids.indexOf(toId);
+  if (fromIndex < 0 || toIndex < 0) return '';
+  const isClosedForward = routeInfo.route.closed
+    && fromIndex === ids.length - 1
+    && toIndex === 0;
+  const isClosedReverse = routeInfo.route.closed
+    && fromIndex === 0
+    && toIndex === ids.length - 1;
+  const reversesRoute = isClosedReverse || (!isClosedForward && toIndex < fromIndex);
+  const directionIds = routeDirectionIds(routeInfo.line, routeInfo.route);
+  return directionIds.find((directionId) => (
+    directionReversesRoute(routeInfo.line, routeInfo.route, directionId) === reversesRoute
+  )) || directionIds[0] || '';
+}
+
+function emptyMetrics(originId) {
+  const record = recordById[originId];
+  return {
+    stationIds: record ? [originId] : [],
+    lineIds: record ? [record.lineId] : [],
+    transferStationIds: [],
+    segmentCount: 0,
+    transferCount: 0,
+    sameLineChangeCount: 0,
+    rideSeconds: 0,
+    initialWaitSeconds: 0,
+    transferWalkSeconds: 0,
+    transferWaitSeconds: 0,
+    sameLineChangeWalkSeconds: 0,
+    sameLineChangeWaitSeconds: 0,
+    reverseWalkSeconds: 0,
+    isReverse: false,
+    totalSeconds: 0,
+  };
+}
+
+function comparePathCost(left, right) {
+  if (left.totalSeconds !== right.totalSeconds) return left.totalSeconds - right.totalSeconds;
+  if (left.transferCount !== right.transferCount) {
+    return left.transferCount - right.transferCount;
+  }
+  if (left.sameLineChangeCount !== right.sameLineChangeCount) {
+    return left.sameLineChangeCount - right.sameLineChangeCount;
+  }
+  return left.segmentCount - right.segmentCount;
+}
+
+function priorityPush(queue, item) {
+  queue.push(item);
+  let index = queue.length - 1;
+  while (index > 0) {
+    const parentIndex = Math.floor((index - 1) / 2);
+    if (comparePathCost(queue[parentIndex], item) <= 0) break;
+    queue[index] = queue[parentIndex];
+    index = parentIndex;
+  }
+  queue[index] = item;
+}
+
+function priorityPop(queue) {
+  if (queue.length === 1) return queue.pop();
+  const first = queue[0];
+  const last = queue.pop();
+  let index = 0;
+  while (true) {
+    const leftIndex = index * 2 + 1;
+    if (leftIndex >= queue.length) break;
+    const rightIndex = leftIndex + 1;
+    const childIndex = rightIndex < queue.length
+      && comparePathCost(queue[rightIndex], queue[leftIndex]) < 0
+      ? rightIndex
+      : leftIndex;
+    if (comparePathCost(last, queue[childIndex]) <= 0) break;
+    queue[index] = queue[childIndex];
+    index = childIndex;
+  }
+  queue[index] = last;
+  return first;
+}
+
+function routeStateKey(item) {
+  return [
+    item.stationId,
+    item.routeId || '',
+    item.direction || '',
+    item.started ? '1' : '0',
+  ].join('|');
+}
+
+function buildMetricsFromResult(result, previous) {
+  const stationIds = [];
+  const transferStationIds = [];
+  let cursorKey = routeStateKey(result);
+  while (cursorKey) {
+    const step = previous[cursorKey];
+    const stationId = step ? step.to : result.originId;
+    stationIds.push(stationId);
+    if (step && step.kind === 'transfer') {
+      transferStationIds.push(step.to, step.from);
+    }
+    cursorKey = step && step.fromKey;
+  }
+  stationIds.reverse();
+  transferStationIds.reverse();
+  const lineIds = stationIds.reduce((values, stationId) => {
+    const record = recordById[stationId];
+    if (record && !values.includes(record.lineId)) values.push(record.lineId);
+    return values;
+  }, []);
+  return Object.assign({}, result, {
+    stationIds,
+    lineIds,
+    transferStationIds: transferStationIds.filter(
+      (stationId, index, all) => all.indexOf(stationId) === index,
+    ),
+  });
+}
+
+function runShortestPaths(originId, journeyContext, allowTransfers) {
+  const context = journeyContext || {};
+  const bestByState = Object.create(null);
+  const bestResultByStationId = Object.create(null);
   const previous = Object.create(null);
-  const queue = [{ id: originId, cost: 0, segmentCount: 0, transferCount: 0 }];
-  distances[originId] = 0;
+  const initial = Object.assign(emptyMetrics(originId), {
+    stationId: originId,
+    originId,
+    routeId: '',
+    direction: '',
+    started: false,
+  });
+  const initialKey = routeStateKey(initial);
+  const queue = [initial];
+  bestByState[initialKey] = initial;
 
   while (queue.length) {
-    queue.sort((left, right) => left.cost - right.cost);
-    const current = queue.shift();
-    if (current.cost !== distances[current.id]) continue;
-    if (current.id === targetId) {
-      const stationIds = [];
-      const transferStationIds = [];
-      let cursorId = targetId;
-      while (cursorId) {
-        stationIds.push(cursorId);
-        const step = previous[cursorId];
-        if (step && step.kind === 'transfer') {
-          transferStationIds.push(cursorId, step.from);
-        }
-        cursorId = step && step.from;
-      }
-      stationIds.reverse();
-      transferStationIds.reverse();
-      const lineIds = stationIds.reduce((result, stationId) => {
-        const record = recordById[stationId];
-        if (record && !result.includes(record.lineId)) result.push(record.lineId);
-        return result;
-      }, []);
-      return {
-        stationIds,
-        lineIds,
-        transferStationIds: transferStationIds.filter(
-          (stationId, index, all) => all.indexOf(stationId) === index,
-        ),
-        segmentCount: current.segmentCount,
-        transferCount: current.transferCount,
-      };
+    const current = priorityPop(queue);
+    const currentKey = routeStateKey(current);
+    if (bestByState[currentKey] !== current) continue;
+    if (!bestResultByStationId[current.stationId]) {
+      bestResultByStationId[current.stationId] = current;
     }
 
-    (graph[current.id] || []).forEach((edge) => {
-      const isTransfer = edge.kind === 'transfer';
-      const cost = current.cost + (isTransfer ? 6 : 3);
-      if (distances[edge.to] !== undefined && distances[edge.to] <= cost) return;
-      distances[edge.to] = cost;
-      previous[edge.to] = { from: current.id, kind: edge.kind };
-      queue.push({
-        id: edge.to,
-        cost,
-        segmentCount: current.segmentCount + (isTransfer ? 0 : 1),
-        transferCount: current.transferCount + (isTransfer ? 1 : 0),
+    (graph[current.stationId] || []).forEach((edge) => {
+      if (edge.kind === 'transfer') {
+        if (!allowTransfers) return;
+        const walkingSeconds = transferWalkSeconds(current.stationId, edge.to);
+        const next = Object.assign({}, current, {
+          stationId: edge.to,
+          routeId: '',
+          direction: '',
+          transferCount: current.transferCount + 1,
+          transferWalkSeconds: current.transferWalkSeconds + walkingSeconds,
+          totalSeconds: current.totalSeconds + walkingSeconds,
+        });
+        const nextKey = routeStateKey(next);
+        if (bestByState[nextKey] && comparePathCost(bestByState[nextKey], next) <= 0) return;
+        bestByState[nextKey] = next;
+        previous[nextKey] = {
+          from: current.stationId,
+          to: edge.to,
+          fromKey: currentKey,
+          kind: 'transfer',
+        };
+        priorityPush(queue, next);
+        return;
+      }
+
+      edge.routeIds.forEach((routeId) => {
+        const routeInfo = routeInfoById[routeId];
+        if (!routeInfo) return;
+        const directionId = routeStepDirection(routeInfo, current.stationId, edge.to);
+        if (current.routeId === routeId
+          && current.direction
+          && current.direction !== directionId) return;
+        const firstBoarding = !current.routeId;
+        const isSelectedLoop = routeInfo.line.type === 'loop'
+          && String(context.lineId || '') === routeInfo.line.id
+          && context.routeId === routeId;
+        if (isSelectedLoop && context.direction && context.direction !== directionId) return;
+
+        const switchesSameLine = Boolean(current.routeId && current.routeId !== routeId);
+        const headwaySeconds = serviceHeadwaySeconds(routeInfo.line.id, routeId, directionId);
+        let addedInitialWait = 0;
+        let addedTransferWait = 0;
+        let addedSameLineWalk = 0;
+        let addedSameLineWait = 0;
+        if (firstBoarding) {
+          if (current.started) addedTransferWait = headwaySeconds / 2;
+          else addedInitialWait = headwaySeconds / 2;
+        } else if (switchesSameLine) {
+          addedSameLineWalk = defaultTimeSeconds(
+            'sameLineChangeWalkSeconds',
+            ETA_DEFAULTS.sameLineChangeWalkSeconds,
+          );
+          addedSameLineWait = headwaySeconds / 2;
+        }
+        const rideSeconds = directedSegmentSeconds(current.stationId, edge.to);
+        const isReverse = !current.started
+          && String(context.lineId || '') === routeInfo.line.id
+          && context.routeId === routeId
+          && Boolean(context.direction)
+          && context.direction !== directionId;
+        const addedSeconds = rideSeconds
+          + addedInitialWait
+          + addedTransferWait
+          + addedSameLineWalk
+          + addedSameLineWait;
+        const next = Object.assign({}, current, {
+          stationId: edge.to,
+          routeId,
+          direction: directionId,
+          started: true,
+          segmentCount: current.segmentCount + 1,
+          sameLineChangeCount: current.sameLineChangeCount + (switchesSameLine ? 1 : 0),
+          rideSeconds: current.rideSeconds + rideSeconds,
+          initialWaitSeconds: current.initialWaitSeconds + addedInitialWait,
+          transferWaitSeconds: current.transferWaitSeconds + addedTransferWait,
+          sameLineChangeWalkSeconds: current.sameLineChangeWalkSeconds + addedSameLineWalk,
+          sameLineChangeWaitSeconds: current.sameLineChangeWaitSeconds + addedSameLineWait,
+          isReverse: current.isReverse || isReverse,
+          totalSeconds: current.totalSeconds + addedSeconds,
+        });
+        const nextKey = routeStateKey(next);
+        if (bestByState[nextKey] && comparePathCost(bestByState[nextKey], next) <= 0) return;
+        bestByState[nextKey] = next;
+        previous[nextKey] = {
+          from: current.stationId,
+          to: edge.to,
+          fromKey: currentKey,
+          kind: 'train',
+          lineId: edge.lineId,
+        };
+        priorityPush(queue, next);
       });
     });
   }
 
-  return {
-    stationIds: [],
-    lineIds: [],
-    transferStationIds: [],
-    segmentCount: 0,
-    transferCount: 0,
+  return { bestResultByStationId, previous };
+}
+
+function createPathResolver(originId, journeyContext) {
+  if (!recordById[originId]) return () => emptyMetrics('');
+  const indexes = Object.create(null);
+  return (targetId) => {
+    if (!recordById[targetId]) return emptyMetrics('');
+    if (originId === targetId) return emptyMetrics(originId);
+    const sameLineJourney = recordById[originId].lineId === recordById[targetId].lineId;
+    const mode = sameLineJourney ? 'sameLine' : 'network';
+    if (!indexes[mode]) {
+      indexes[mode] = runShortestPaths(originId, journeyContext, !sameLineJourney);
+    }
+    const result = indexes[mode].bestResultByStationId[targetId];
+    return result
+      ? buildMetricsFromResult(result, indexes[mode].previous)
+      : emptyMetrics('');
   };
+}
+
+function shortestMetrics(originId, targetId, journeyContext) {
+  return createPathResolver(originId, journeyContext)(targetId);
 }
 
 function normalizeAccess(accessRaw) {
@@ -262,7 +583,7 @@ function normalizeAccess(accessRaw) {
 }
 
 function normalizeLocationText(locationRaw) {
-  return String(locationRaw || '')
+  return normalizeFacilityTerms(locationRaw)
     .replace(/[\r\n\t]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -385,9 +706,10 @@ function deriveRestroomPresentation(record) {
   };
 }
 
-function accessCategory(access) {
-  if (access.indexOf('车站外') >= 0) return '车站外';
-  if (access.indexOf('闸外') >= 0) return '闸外';
+function accessCategory(access, presentation) {
+  const source = `${access || ''} ${(presentation && presentation.accessLabel) || ''}`;
+  if (/车站外|站外/.test(source)) return '车站外';
+  if (source.indexOf('闸外') >= 0) return '闸外';
   return '闸内';
 }
 
@@ -397,26 +719,33 @@ function restroomRecordsForStation(station) {
   return recordIds.map((id) => recordById[id]).filter((record) => record && record.status === 'active');
 }
 
-function buildRestroom(record, originStationId, isReverse) {
+function buildRestroom(record, metrics) {
   const access = normalizeAccess(record.accessRaw);
   const presentation = deriveRestroomPresentation(record);
-  const metrics = shortestMetrics(originStationId, record.lineStationId);
   const eta = estimateEta({
     segmentCount: metrics.segmentCount,
     transferCount: metrics.transferCount,
-    isReverse,
-    access: accessCategory(access),
+    sameLineChangeCount: metrics.sameLineChangeCount,
+    isReverse: metrics.isReverse,
+    rideSeconds: metrics.rideSeconds,
+    initialWaitSeconds: metrics.initialWaitSeconds,
+    transferWalkSeconds: metrics.transferWalkSeconds,
+    transferWaitSeconds: metrics.transferWaitSeconds,
+    sameLineChangeWalkSeconds: metrics.sameLineChangeWalkSeconds,
+    sameLineChangeWaitSeconds: metrics.sameLineChangeWaitSeconds,
+    reverseWalkSeconds: metrics.reverseWalkSeconds,
+    access: accessCategory(access, presentation),
   });
   return {
     id: `${record.lineStationId}-restroom`,
     stationId: record.lineStationId,
     lineId: record.lineId,
     lineName: record.lineName,
-    location: record.locationRaw || '',
+    location: normalizeFacilityTerms(record.locationRaw),
     locationRaw: record.locationRaw,
     access,
     accessRaw: record.accessRaw,
-    facility: '厕所',
+    facility: '卫生间',
     accessLabel: presentation.accessLabel,
     accessConflict: presentation.accessConflict,
     zoneLabel: presentation.zoneLabel,
@@ -537,24 +866,6 @@ function visibleOriginIndex(stations, originStationId) {
   return transferIndex >= 0 ? transferIndex : Math.floor(stations.length / 2);
 }
 
-function directRouteMetrics(line, stations, originIndex, targetIndex) {
-  if (originIndex < 0 || targetIndex < 0) return null;
-  if (line.type !== 'loop') {
-    return {
-      segmentCount: Math.abs(targetIndex - originIndex),
-      isReverse: targetIndex < originIndex,
-    };
-  }
-
-  const forwardCount = (targetIndex - originIndex + stations.length) % stations.length;
-  const reverseCount = (originIndex - targetIndex + stations.length) % stations.length;
-  const reverseWins = reverseCount + 2 < forwardCount;
-  return {
-    segmentCount: reverseWins ? reverseCount : forwardCount,
-    isReverse: reverseWins,
-  };
-}
-
 function buildHomeView(input) {
   const resolved = resolveInput(input);
   const direction = resolved.line.directions[resolved.directionId];
@@ -572,20 +883,21 @@ function buildHomeView(input) {
   const requestedOriginId = input && input.originStationId;
   const originStationId = resolveStationId(requestedOriginId);
   const currentIndex = visibleOriginIndex(stations, originStationId);
-  const directOriginIndex = stations.findIndex((station) => station.id === originStationId);
   const originRecord = recordById[originStationId];
+  const journeyContext = {
+    lineId: resolved.line.id,
+    routeId: resolved.route.id,
+    direction: resolved.directionId,
+  };
+  const pathForTarget = createPathResolver(originStationId, journeyContext);
 
-  const viewStations = stations.map((station, index) => {
-    const directMetrics = directOriginIndex >= 0
-      ? directRouteMetrics(resolved.line, stations, directOriginIndex, index)
-      : null;
+  const viewStations = stations.map((station) => {
     const restroomRecords = restroomRecordsForStation(station);
     const restrooms = restroomRecords.map((record) => buildRestroom(
       record,
-      originStationId,
-      Boolean(directMetrics && directMetrics.isReverse),
+      pathForTarget(record.lineStationId),
     ));
-    const path = shortestMetrics(originStationId, station.id);
+    const path = pathForTarget(station.id);
     const syncLineIds = path.lineIds.slice();
     restrooms.forEach((restroom) => {
       if (!syncLineIds.includes(restroom.lineId)) syncLineIds.push(restroom.lineId);
@@ -609,7 +921,7 @@ function buildHomeView(input) {
           stationId: targetId,
         };
       }).sort((left, right) => compareLineIds(left.lineId, right.lineId)),
-      isReverse: Boolean(directMetrics && directMetrics.isReverse),
+      isReverse: path.isReverse,
       hasRestroom: restrooms.length > 0,
       isOrigin: station.id === originStationId,
       dataState: station.record ? 'available' : 'unavailable',
@@ -686,4 +998,9 @@ module.exports = {
   getStationContext,
   getLocationCandidateOptions,
   getPathMetadata: shortestMetrics,
+  __test: {
+    directedSegmentSeconds,
+    lineSegmentMedianSeconds,
+    medianSeconds,
+  },
 };

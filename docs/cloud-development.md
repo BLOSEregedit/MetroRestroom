@@ -216,11 +216,64 @@
 - 请求进行中保留原绿色或蓝色圆点与时间，右侧刷新图标旋转并显示“更新中”；失败后显示“重试”。
 - 首页所有状态都保留无边框、无底色的“刷新图标＋更新／更新中／重试”，不使用长条胶囊；个人页只展示同款紧凑状态，不重复提供手动入口，关于页不再承载数据同步状态。
 
-## 上线前云端操作
+## ETA V2 与完整数据发布边界
 
-以下操作会改变云端资源，执行前需要用户确认：
+本节是已确认的未来设计，不表示线上资源已经按 V2 建立。当前部署继续使用上文 `schemaVersion: 1` 的上海卫生间状态覆盖协议；客户端仍完整携带线路、站点、拓扑、坐标、入口和卫生间基础数据。
 
-1. 关联小程序 AppID。
-2. 创建 `data_versions`、`correction_reports` 和 `correction_rate_limits` 集合并设置权限、索引。
-3. 部署 `metroRestroomApi` 云函数。
-4. 写入首条 `restroom-data` 版本记录。
+### 统一维护源与本地完整基线
+
+- 一城一 Excel 工作簿是人工采集和批量导入格式；CloudBase 是完成审核后的统一维护和发布源。
+- 同一 `activeVersion` 必须生成 CloudBase 不可变快照、代码包完整基线和回归夹具。断网、CloudBase 异常或候选版本校验失败时，首页继续使用旧缓存或代码包完整基线。
+- 数据逻辑上分为 `core`、`detail`、`eta`、`status`；WXML、WXSS、JavaScript、图片、动效和交互配置只在代码包发布，远端数据不得改变 UI 或执行逻辑。
+- `core + detail + eta` 默认按城市一次批量拉取，`status` 可保留独立版本。逻辑分层不等于逐层或逐线路发请求。
+
+现有上海运行 JSON 实测为 `540,331 B raw / 59,549 B gzip`，ETA V2 预计增加 `66,610 B raw / 6,046 B gzip`，合计约 `607 KB raw`；逐线路强拆因共享数据重复约为 `711 KB raw / 91 KB gzip`。因此上海 V2 保持一个城市批次，不采用逐线路完整数据快照。
+
+物理拆分使用项目工程阈值，而不是平台官方硬限制：
+
+- `<= 256 KB raw`：单个 `city-data` part，一次响应。
+- `256—700 KB raw`：仍为一个城市批次，可将 part 控制在 `128—256 KB raw`。
+- `> 700 KB raw`：按逻辑模块或版本化文件拆分。
+- 任一单模块 `> 512 KB raw`：改版本化文件下载或分页。
+
+### V2 manifest 与原子激活
+
+逻辑 manifest 示例：
+
+```json
+{
+  "cityId": "shanghai",
+  "schemaVersion": 2,
+  "activeVersion": "sha256-...",
+  "parts": [
+    { "key": "core", "version": "sha256-...", "sha256": "..." },
+    { "key": "detail-1", "version": "sha256-...", "sha256": "..." },
+    { "key": "eta", "version": "sha256-...", "sha256": "..." }
+  ],
+  "statusVersion": "sha256-...",
+  "effectiveAtMs": 0,
+  "minClientSchema": 2
+}
+```
+
+发布端必须先写入全部不可变 part，回读并校验 schema、哈希、主外键和数量，最后才更新 manifest。客户端版本不一致时一次请求全部缺失 part，写入候选缓存；只有所有 part 验证通过才原子切换城市 `activeVersion`。下载、校验或落盘失败不得修改当前版本指针；旧缓存不可用时回退代码包基线。
+
+### 平台容量边界与来源
+
+- 小程序端云函数响应按 `1 MB` 上限控制；官方 `wx.cloud.callFunction` 文档同时建议大于约 `100 KB` 的数据字段使用临时 CDN，V2 因此保留更低的工程分片门槛：[wx.cloud.callFunction](https://developers.weixin.qq.com/miniprogram/dev/wxcloud/reference-sdk-api/functions/Cloud.callFunction.html)。
+- 单个小程序代码包上限 `2 MB`，全部分包合计上限 `30 MB`：[分包加载](https://developers.weixin.qq.com/miniprogram/dev/framework/subpackages/basic.html)、[代码包体积优化](https://developers.weixin.qq.com/miniprogram/dev/framework/performance/tips/start_optimizeA.html)。
+- 本地缓存总上限 `10 MB`，单个 key 上限 `1 MB`：[wx.setStorage](https://developers.weixin.qq.com/miniprogram/dev/api/storage/wx.setStorage.html)。
+- `wx.request`、`wx.uploadFile`、`wx.downloadFile` 最大并发均为 `10`：[网络](https://developers.weixin.qq.com/miniprogram/dev/framework/ability/network.html)。
+
+平台上限只作为发布门禁，不是推荐目标。JSON 包装、候选版本与当前版本并存、未来城市增长都必须预留空间；接近边界时优先改用版本化文件，不以 gzip 后体积替代未压缩响应校验。
+
+## 后续受控云端操作
+
+V1 的 AppID 关联、`data_versions`／`correction_reports`／`correction_rate_limits` 集合和 `metroRestroomApi` 已按当前协议部署。本轮只固化文档，不修改任何线上资源。
+
+以下 V2 操作会改变云端资源，执行前需要另行列出范围、权限、索引、兼容风险、回退和验证计划，并获得用户确认：
+
+1. 新建 staging、release、manifest 或 snapshot 集合。
+2. 修改现有 `data_versions` 结构、权限或索引。
+3. 上传完整城市数据或切换任一城市 `activeVersion`。
+4. 部署支持 V2 完整数据发布／读取的云函数。

@@ -2,6 +2,7 @@ const catalog = require('../../data/catalog');
 const stationEntranceData = require('../../data/station-entrances');
 const stationLocationData = require('../../data/station-locations');
 const { createStationFeedback } = require('../../utils/feedback');
+const { normalizeFacilityTerms } = require('../../utils/display-copy');
 const { rankNearbyStations, resolveNearestEntranceLine } = require('../../utils/location');
 const {
   requestCurrentPosition,
@@ -871,7 +872,7 @@ Page({
         return Object.assign({}, restroom, {
           restroomStatus: restroomStatus || '',
           statusLabel: RESTROOM_STATUS_LABELS[restroomStatus] || '',
-          statusReason: (override && override.reason) || '',
+          statusReason: normalizeFacilityTerms((override && override.reason) || ''),
           hasOperationalIssue: Boolean(restroomStatus),
         });
       });
@@ -893,7 +894,7 @@ Page({
           : '',
         restroomAriaLabel: hasRestroomRecords
           ? `${station.name}站，${hasMultipleRestroomRecords ? '有多处卫生间' : '有卫生间'}${wayfindingSummary ? `，${wayfindingSummary}` : ''}，轻点查看详情`
-          : `${station.name}站，暂无厕所记录`,
+          : `${station.name}站，暂无卫生间记录`,
         isActive: index === currentIndex,
         isBeforeFocus: index === currentIndex - 1,
         isAfterFocus: index === currentIndex + 1,
@@ -2168,7 +2169,7 @@ Page({
         [],
       ),
     });
-    this._addRecentRecord(station, '查看厕所');
+    this._addRecentRecord(station, '查看卫生间');
   },
 
   _buildDrawerGroups(restrooms) {

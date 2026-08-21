@@ -11,10 +11,10 @@ const {
 } = require('../../utils/storage');
 
 const ISSUE_OPTIONS = [
-  { value: 'location', label: '厕所位置不准确' },
+  { value: 'location', label: '卫生间位置不准确' },
   { value: 'access', label: '闸内／闸外信息错误' },
   { value: 'description', label: '出口或位置描述错误' },
-  { value: 'unavailable', label: '厕所已不存在／暂不可用' },
+  { value: 'unavailable', label: '卫生间已不存在／暂不可用' },
   { value: 'other', label: '其他' },
 ];
 

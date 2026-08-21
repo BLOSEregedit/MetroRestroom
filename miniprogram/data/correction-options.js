@@ -1,4 +1,5 @@
 const restroomData = require('./generated/restrooms');
+const { normalizeFacilityTerms } = require('../utils/display-copy');
 
 const lineOptions = restroomData.lines.map((line) => ({
   id: String(line.lineId),
@@ -7,7 +8,7 @@ const lineOptions = restroomData.lines.map((line) => ({
     id: record.lineStationId,
     name: record.stationName,
     restroomId: `${record.lineStationId}-restroom`,
-    location: record.locationRaw || '',
+    location: normalizeFacilityTerms(record.locationRaw),
     access: record.accessRaw || '',
     sourceSheet: record.sourceSheet,
     sourceRow: record.sourceRow,

@@ -1,12 +1,19 @@
 .about-page { min-height: 100vh; padding: 88rpx 40rpx; box-sizing: border-box; text-align: center; }
 .about-mark { display: block; width: 120rpx; height: 120rpx; margin: 0 auto 22rpx; border-radius: 30rpx; }
 .about-title { font-size: 40rpx; font-weight: 600; }
-.about-subtitle { margin-top: 10rpx; color: #999; font-size: 26rpx; }
-.about-card,.source-card { border-radius: 24rpx; background: #fff; text-align: left; }
-.about-card { margin-top: 56rpx; padding: 8rpx 28rpx; }
+.about-card,.privacy-card,.source-card { border-radius: 24rpx; background: #fff; text-align: left; }
+.about-card { margin-top: 44rpx; padding: 8rpx 28rpx; }
 .info-row { display: flex; align-items: center; justify-content: space-between; padding: 24rpx 0; border-bottom: 1rpx solid #eee; color: #555; font-size: 26rpx; }
 .info-row:last-child { border-bottom: 0; }
 .info-value { color: #999; }
+.privacy-card { margin-top: 24rpx; padding: 30rpx 28rpx 8rpx; }
+.privacy-title { color: #1f2429; font-size: 30rpx; font-weight: 600; }
+.privacy-summary { display: block; margin-top: 14rpx; color: #56616b; font-size: 25rpx; line-height: 1.7; }
+.privacy-list { margin-top: 10rpx; }
+.privacy-item { padding: 22rpx 0; border-bottom: 1rpx solid #eee; }
+.privacy-item:last-child { border-bottom: 0; }
+.privacy-item__title { color: #4c535a; font-size: 26rpx; font-weight: 600; }
+.privacy-item__copy { display: block; margin-top: 10rpx; color: #737c84; font-size: 24rpx; line-height: 1.7; }
 .source-card { margin-top: 24rpx; padding: 28rpx; }
 .source-title { color: #4c535a; font-size: 27rpx; font-weight: 600; }
 .source-copy { display: block; margin-top: 16rpx; color: #7d858d; font-size: 23rpx; line-height: 1.65; }
