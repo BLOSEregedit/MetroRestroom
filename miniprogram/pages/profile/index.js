@@ -167,5 +167,6 @@ Page({
     app.globalData.pendingCorrectionContext = null;
     wx.navigateTo({ url: "/pages/correction/index" });
   },
-  openAbout() { wx.navigateTo({ url: "/pages/profile/about/index" }); }
+  openAbout() { wx.navigateTo({ url: "/pages/profile/about/index" }); },
+  openDeveloperNote() { wx.navigateTo({ url: "/pages/profile/developer-note/index" }); }
 });

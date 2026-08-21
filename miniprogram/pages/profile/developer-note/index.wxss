@@ -1,0 +1,9 @@
+.developer-page { min-height: 100vh; box-sizing: border-box; padding: 72rpx 40rpx 80rpx; }
+.note-kicker { color: #007aff; font-size: 22rpx; font-weight: 600; letter-spacing: 2rpx; }
+.note-title { margin-top: 12rpx; color: #1f2429; font-size: 40rpx; font-weight: 700; line-height: 1.3; }
+.note-tagline { margin-top: 22rpx; color: #1f2429; font-size: 31rpx; font-weight: 700; line-height: 1.5; }
+.note-content { margin-top: 38rpx; }
+.note-paragraph { display: block; margin-top: 28rpx; color: #4f5962; font-size: 29rpx; line-height: 1.8; }
+.note-paragraph:first-child { margin-top: 0; }
+.page-back-action { display: flex; min-height: 88rpx; align-items: center; justify-content: center; margin-top: 32rpx; color: #007aff; font-size: 28rpx; font-weight: 500; }
+.page-back-action--pressed { opacity: 0.55; }

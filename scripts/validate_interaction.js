@@ -39,6 +39,7 @@ function createPage(lineId, direction, stationName, originStationId) {
     lineColor: view.line.color,
     lineTextColor: page._getReadableLineColor(view.line.color),
     lineName: view.line.name,
+    directionLabel: view.directionLabel,
     lineOptions: catalog.getLineOptions(),
     locationCandidates: [],
     locationIssue: '',
@@ -65,8 +66,10 @@ function createPage(lineId, direction, stationName, originStationId) {
   page._systemOriginStationId = view.originStationId;
   page._directionMode = 'default';
   page._explicitLineId = '';
-  page.setData = function setData(patch) {
+  page._lineViewStateById = Object.create(null);
+  page.setData = function setData(patch, callback) {
     this.data = Object.assign({}, this.data, patch);
+    if (callback) callback();
   };
   page._cancelPendingLocation = () => {};
   page._saveCurrentPreferences = (patch) => { page._savedPreferences = patch || {}; };
@@ -112,6 +115,34 @@ assert.strictEqual(
   '进入支线线路必须立即选择默认主线路径',
 );
 assert.strictEqual(branchSelectionCase.page._directionMode, 'default', '显式切换线路后方向模式必须重置为默认');
+
+const branchSlotCase = createPage('10', 'to-hongqiao-railway-station', '龙溪路');
+branchSlotCase.page._scheduleStationWheelLayout = () => {};
+branchSlotCase.page._scheduleSyncForVisibleStation = () => {};
+branchSlotCase.page._updateSyncStatus = () => {};
+const decoratedBranchStations = branchSlotCase.page._decorateStations(
+  branchSlotCase.view.stations,
+  branchSlotCase.page.data.currentIndex,
+  branchSlotCase.view.line.color,
+);
+const branchSplitIndex = decoratedBranchStations.findIndex((station) => station.name === '龙溪路');
+assert(branchSplitIndex >= 0 && decoratedBranchStations[branchSplitIndex].branchHint, '10 号线龙溪路必须生成支线切换提示');
+assert.strictEqual(
+  decoratedBranchStations[branchSplitIndex + 1].incomingBranchHint.routeId,
+  'l10-hangzhong-road',
+  '支线切换提示必须挂载到下一站定高行的顶部点击层',
+);
+const branchOriginId = branchSlotCase.page._state.originStationId;
+branchSlotCase.page.onSelectRoute({
+  currentTarget: { dataset: { routeId: 'l10-hangzhong-road' } },
+});
+assert.strictEqual(branchSlotCase.page._state.routeId, 'l10-hangzhong-road', '点击站间入口必须切换至航中路支线');
+assert.strictEqual(
+  branchSlotCase.page._rawStations[branchSlotCase.page.data.currentIndex].name,
+  '龙溪路',
+  '支线切换后必须保持分叉站居中',
+);
+assert.strictEqual(branchSlotCase.page._state.originStationId, branchOriginId, '支线切换不得修改计算起点');
 
 const loopBoundaryCase = createPage('4', 'outer', '宜山路', peopleSquare.id);
 loopBoundaryCase.page.data.isLoopLine = true;
@@ -223,21 +254,38 @@ assert.strictEqual(
   '吸附兜底必须把真实 scrollTop 收敛到目标站位',
 );
 
-['3', '4'].forEach((targetLineId) => {
-  const transferCase = createPage('1', 'forward', '上海火车站');
-  const originId = transferCase.page._state.originStationId;
-  const transfer = transferCase.station.transfers.find((item) => item.lineId === targetLineId);
-  assert(transfer, `上海火车站缺少 ${targetLineId} 号线换乘入口`);
-  transferCase.page._refreshHomeView = (stationId) => {
-    transferCase.page._refreshedStationId = stationId;
-  };
-  transferCase.page.onSelectTransferLine({
-    currentTarget: { dataset: { stationId: transfer.stationId, lineId: targetLineId } },
-  });
-  assert.strictEqual(transferCase.page._state.lineId, targetLineId, '点击应切换指定换乘线路');
-  assert.strictEqual(transferCase.page._refreshedStationId, transfer.stationId, '换乘后应保持同一物理站');
-  assert.strictEqual(transferCase.page._state.originStationId, originId, '换乘浏览不得修改起点');
-});
+const transferPresentationCase = createPage('3', 'forward', '上海火车站');
+const transferPresentation = transferPresentationCase.page._decorateStations(
+  transferPresentationCase.view.stations,
+  transferPresentationCase.page.data.currentIndex,
+  transferPresentationCase.page.data.lineColor,
+);
+const presentedTransferStation = transferPresentation.find((station) => station.name === '上海火车站');
+assert.deepStrictEqual(
+  presentedTransferStation.transferLineOptions.map((item) => item.lineId),
+  ['1', '3', '4'],
+  '换乘卡必须静态展示当前线路与所有可换乘线路',
+);
+assert.strictEqual(
+  presentedTransferStation.transferSwipeLeft.lineId,
+  '4',
+  '手指向左拖动时必须提示全局顺序中的下一条线',
+);
+assert.strictEqual(
+  presentedTransferStation.transferSwipeRight.lineId,
+  '1',
+  '手指向右拖动时必须提示全局顺序中的上一条线',
+);
+
+const nonFocusTransfer = transferPresentation.find(
+  (station, index) => index !== transferPresentationCase.page.data.currentIndex
+    && station.transferLineOptions.length > 1,
+);
+assert(nonFocusTransfer, '测试线路必须有非焦点换乘站');
+assert(
+  nonFocusTransfer.transferSummaryAriaLabel.includes('经过'),
+  '非焦点换乘卡也必须输出完整静态线路摘要',
+);
 
 const leftSwipeCase = createPage('3', 'forward', '上海火车站');
 leftSwipeCase.page._switchToTransfer = (transfer) => { leftSwipeCase.page._selectedTransfer = transfer; };
@@ -248,6 +296,126 @@ const rightSwipeCase = createPage('3', 'forward', '上海火车站');
 rightSwipeCase.page._switchToTransfer = (transfer) => { rightSwipeCase.page._selectedTransfer = transfer; };
 rightSwipeCase.page.onWheelHorizontalSwipe(100, -5);
 assert.strictEqual(rightSwipeCase.page._selectedTransfer.lineId, '1', '右滑应选择数值相邻的上一线路');
+
+const thresholdRollbackCase = createPage('3', 'forward', '上海火车站');
+thresholdRollbackCase.page._switchToTransfer = (transfer) => { thresholdRollbackCase.page._selectedTransfer = transfer; };
+thresholdRollbackCase.page.onWheelHorizontalSwipe(-47, 0);
+assert.strictEqual(thresholdRollbackCase.page._selectedTransfer, undefined, '横滑未达 48px 门槛时必须回退当前线路');
+thresholdRollbackCase.page.onWheelHorizontalDragStart();
+assert(Date.now() < thresholdRollbackCase.page._suppressCardTapUntil, '有效横向拖动必须立即抑制卡片点击');
+
+const twoLineSwipeCase = createPage('1', 'forward', '呼兰路');
+twoLineSwipeCase.page._switchToTransfer = (transfer) => {
+  twoLineSwipeCase.page._selectedTransfer = transfer;
+};
+twoLineSwipeCase.page.onWheelHorizontalSwipe(-100, 5);
+assert.strictEqual(twoLineSwipeCase.page._selectedTransfer.lineId, '18', '两线换乘站左滑必须切至唯一另一线路');
+twoLineSwipeCase.page._selectedTransfer = null;
+twoLineSwipeCase.page.onWheelHorizontalSwipe(100, 5);
+assert.strictEqual(twoLineSwipeCase.page._selectedTransfer.lineId, '18', '两线换乘站右滑也必须切至唯一另一线路');
+
+const transferBoundaryCase = createPage('1', 'forward', '上海火车站');
+transferBoundaryCase.page._switchToTransfer = (transfer) => {
+  transferBoundaryCase.page._selectedTransfer = transfer;
+};
+transferBoundaryCase.page.onWheelHorizontalSwipe(100, 5);
+assert.strictEqual(transferBoundaryCase.page._selectedTransfer, undefined, '多线换乘站位于首项时右滑不得循环到末项');
+
+const unsettledTransferCase = createPage('3', 'forward', '上海火车站');
+unsettledTransferCase.page._wheelPhase = { value: 1 };
+unsettledTransferCase.page._wheelPosition = { value: unsettledTransferCase.page.data.currentIndex + .3 };
+unsettledTransferCase.page._wheelSettledIndex = { value: unsettledTransferCase.page.data.currentIndex };
+unsettledTransferCase.page._switchToTransfer = (transfer) => {
+  unsettledTransferCase.page._selectedTransfer = transfer;
+};
+unsettledTransferCase.page.onWheelHorizontalSwipe(-100, 5);
+assert.strictEqual(unsettledTransferCase.page._selectedTransfer, undefined, '纵向拨轮未停稳时不得按旧中心站横切线路');
+
+const centuryAvenueLine2 = createPage('2', 'forward', '世纪大道');
+const centuryAvenueLine6 = createPage('6', 'forward', '世纪大道');
+const line2TransferOrder = centuryAvenueLine2.page
+  ._buildTransferLineOptions(centuryAvenueLine2.station, centuryAvenueLine2.view.line.color)
+  .map((item) => item.lineId);
+const line6TransferOrder = centuryAvenueLine6.page
+  ._buildTransferLineOptions(centuryAvenueLine6.station, centuryAvenueLine6.view.line.color)
+  .map((item) => item.lineId);
+assert.deepStrictEqual(line2TransferOrder, ['2', '4', '6', '9'], '世纪大道换乘线路必须按全局线路顺序排列');
+assert.deepStrictEqual(line6TransferOrder, line2TransferOrder, '同站切线后换乘胶囊位置不得因当前线路变化而重排');
+
+const transferDirectionMemoryCase = createPage('3', 'reverse', '上海火车站');
+transferDirectionMemoryCase.page._directionMode = 'manual';
+transferDirectionMemoryCase.page._scheduleStationWheelLayout = () => {};
+transferDirectionMemoryCase.page._scheduleSyncForVisibleStation = () => {};
+transferDirectionMemoryCase.page._updateSyncStatus = () => {};
+const transferToastCount = toastCalls.length;
+const transferToLine1 = transferDirectionMemoryCase.station.transfers.find(
+  (item) => item.lineId === '1',
+);
+transferDirectionMemoryCase.page._switchToTransfer(transferToLine1);
+const line1ActiveStation = transferDirectionMemoryCase.page
+  ._rawStations[transferDirectionMemoryCase.page.data.currentIndex];
+const transferBackToLine3 = line1ActiveStation.transfers.find((item) => item.lineId === '3');
+transferDirectionMemoryCase.page._switchToTransfer(transferBackToLine3);
+assert.strictEqual(transferDirectionMemoryCase.page._state.direction, 'reverse', '切回线路时必须恢复该线路本次使用中的手动方向');
+assert.strictEqual(transferDirectionMemoryCase.page._directionMode, 'manual', '恢复手动方向时必须同时恢复方向来源状态');
+assert.strictEqual(
+  transferDirectionMemoryCase.page._rawStations[transferDirectionMemoryCase.page.data.currentIndex].name,
+  '上海火车站',
+  '恢复线路方向后仍须保持同一物理站居中',
+);
+assert.strictEqual(toastCalls.length, transferToastCount, '动态滑动提示已给出去向，切线后不得再弹 Toast');
+
+const loopDirectionMemoryCase = createPage('4', 'inner', '上海体育馆');
+loopDirectionMemoryCase.page._directionMode = 'manual';
+loopDirectionMemoryCase.page._scheduleStationWheelLayout = () => {};
+loopDirectionMemoryCase.page._scheduleSyncForVisibleStation = () => {};
+loopDirectionMemoryCase.page._updateSyncStatus = () => {};
+loopDirectionMemoryCase.page._switchToTransfer(
+  loopDirectionMemoryCase.station.transfers.find((item) => item.lineId === '1'),
+);
+const line1Stadium = loopDirectionMemoryCase.page
+  ._rawStations[loopDirectionMemoryCase.page.data.currentIndex];
+loopDirectionMemoryCase.page._switchToTransfer(
+  line1Stadium.transfers.find((item) => item.lineId === '4'),
+);
+assert.strictEqual(loopDirectionMemoryCase.page._state.direction, 'inner', '切回 4 号线必须恢复本次使用中的内圈方向');
+assert.strictEqual(loopDirectionMemoryCase.page._directionMode, 'manual', '4 号线圈向记忆必须保留手动状态');
+
+const branchMemoryCase = createPage('1', 'forward', '陕西南路');
+branchMemoryCase.page._scheduleStationWheelLayout = () => {};
+branchMemoryCase.page._scheduleSyncForVisibleStation = () => {};
+branchMemoryCase.page._updateSyncStatus = () => {};
+branchMemoryCase.page._lineViewStateById['10'] = {
+  lineId: '10',
+  routeId: 'l10-hangzhong-road',
+  direction: 'to-hangzhong-road',
+  directionMode: 'manual',
+};
+branchMemoryCase.page._switchToTransfer(
+  branchMemoryCase.station.transfers.find((item) => item.lineId === '10'),
+);
+assert.strictEqual(branchMemoryCase.page._state.routeId, 'l10-hangzhong-road', '公共区段切入 10 号线必须恢复该线支线路径');
+assert.strictEqual(branchMemoryCase.page._state.direction, 'to-hangzhong-road', '恢复 10 号线路径时必须恢复与路径匹配的方向');
+
+const invalidBranchMemoryCase = createPage('2', 'forward', '虹桥火车站');
+invalidBranchMemoryCase.page._scheduleStationWheelLayout = () => {};
+invalidBranchMemoryCase.page._scheduleSyncForVisibleStation = () => {};
+invalidBranchMemoryCase.page._updateSyncStatus = () => {};
+invalidBranchMemoryCase.page._lineViewStateById['10'] = {
+  lineId: '10',
+  routeId: 'l10-hangzhong-road',
+  direction: 'to-hangzhong-road',
+  directionMode: 'manual',
+};
+invalidBranchMemoryCase.page._switchToTransfer(
+  invalidBranchMemoryCase.station.transfers.find((item) => item.lineId === '10'),
+);
+assert.strictEqual(
+  invalidBranchMemoryCase.page._state.routeId,
+  'l10-hongqiao-railway-station',
+  '记忆路径不包含目标换乘站时必须回退到包含该站的合法默认路径',
+);
+assert.strictEqual(invalidBranchMemoryCase.page._directionMode, 'default', '失效路径回退后不得保留手动方向来源');
 
 const verticalSwipeCase = createPage('3', 'forward', '上海火车站');
 verticalSwipeCase.page._switchToTransfer = (transfer) => {
@@ -759,9 +927,26 @@ approachSamples.slice(1).forEach((strength, index) => {
 });
 const halfMotion = wheelPhysics.getCardMotion(.5, 100);
 assert(Math.abs(halfMotion.focus - .5) < 1e-10, '半程焦点强度必须为 0.5');
-assert.strictEqual(halfMotion.scaleX, 1.0325, '半程横向缩放必须连续插值');
+assert.strictEqual(halfMotion.scaleX, 1.04, '半程横向缩放必须连续插值');
 assert.strictEqual(halfMotion.scaleY, 1.0275, '半程纵向缩放必须连续插值');
 assert.strictEqual(halfMotion.translateY, 5.5, '半程让位必须连续插值');
+
+const partialTransferSwipe = wheelPhysics.getTransferSwipeMotion(24, 0, 1, 48, 1.2);
+assert(partialTransferSwipe.progress > 0 && partialTransferSwipe.progress < 1, '未达门槛的横滑必须连续显示中间进度');
+assert.strictEqual(partialTransferSwipe.ready, 0, '未达 48px 时提示不得进入可切换高亮态');
+const readyTransferSwipe = wheelPhysics.getTransferSwipeMotion(48, 0, 1, 48, 1.2);
+assert.strictEqual(readyTransferSwipe.progress, 1, '达到门槛时动态提示必须完整显示');
+assert.strictEqual(readyTransferSwipe.ready, 1, '达到门槛时必须进入可切换高亮态');
+assert.strictEqual(
+  wheelPhysics.getTransferSwipeMotion(-48, 0, -1, 48, 1.2).ready,
+  1,
+  '向左拖动必须使右侧提示进入可切换态',
+);
+assert.strictEqual(
+  wheelPhysics.getTransferSwipeMotion(24, 30, 1, 48, 1.2).progress,
+  0,
+  '纵向或斜向手势不得误触发换乘遮罩',
+);
 
 assert.deepStrictEqual(
   [-1, 0, 1, 2].map((index) => Number(wheelPhysics.getFocusStrength(index - .5).toFixed(4))),
@@ -817,6 +1002,7 @@ groups.forEach((group) => {
     '抽屉 ETA 必须使用自动优化后的可读线路色',
   );
   assert.strictEqual(group.isCurrent, group.lineId === '3', '抽屉当前线路标记错误');
+  assert(group.stationId, '抽屉线路分组必须携带自身线路站点 ID');
   group.restrooms.forEach((restroom) => {
     assert.strictEqual(restroom.lineId, group.lineId, '厕所必须保留自身 lineId');
     assert.strictEqual(restroom.lineName, option.name, '厕所必须保留自身 lineName');
@@ -847,6 +1033,72 @@ drawerCase.page.onOpenRestroomDrawer({
 assert.strictEqual(drawerCase.page.data.drawerStation.id, nonFocusStation.id, '任意卡位整卡点击必须直接打开对应站点');
 assert.strictEqual(drawerCase.page.data.currentIndex, drawerCurrentIndex, '打开非焦点卡抽屉不得改变轮盘焦点');
 assert.strictEqual(drawerCase.page.data.wheelScrollTop, 246, '打开非焦点卡抽屉不得改变轮盘位置');
+
+const currentDrawerGroup = drawerCase.page.data.drawerGroups.find((group) => group.isCurrent);
+drawerCase.page._selectedDrawerTransfer = null;
+drawerCase.page._switchToTransfer = (transfer) => {
+  drawerCase.page._selectedDrawerTransfer = transfer;
+};
+drawerCase.page.onSelectDrawerLine({
+  currentTarget: {
+    dataset: {
+      lineId: currentDrawerGroup.lineId,
+      stationId: currentDrawerGroup.stationId,
+    },
+  },
+});
+assert.strictEqual(drawerCase.page._selectedDrawerTransfer, null, '抽屉当前线路标题不得重复触发切线');
+assert.strictEqual(drawerCase.page.data.showRestroomDrawer, true, '点击当前线路标题不得关闭抽屉');
+
+const otherDrawerGroup = drawerCase.page.data.drawerGroups.find((group) => !group.isCurrent);
+drawerCase.page.onSelectDrawerLine({
+  currentTarget: {
+    dataset: {
+      lineId: otherDrawerGroup.lineId,
+      stationId: otherDrawerGroup.stationId,
+    },
+  },
+});
+assert.deepStrictEqual(
+  drawerCase.page._selectedDrawerTransfer,
+  { lineId: otherDrawerGroup.lineId, stationId: otherDrawerGroup.stationId },
+  '非中心卡打开的抽屉必须使用分组自身线路站点 ID 切线',
+);
+assert.strictEqual(drawerCase.page.data.showRestroomDrawer, false, '从抽屉切线前必须先关闭抽屉');
+
+const drawerSwitchCase = createPage('3', 'forward', '东宝兴路', peopleSquare.id);
+const drawerSwitchStation = drawerSwitchCase.view.stations.find(
+  (station) => station.name === '上海火车站',
+);
+const drawerSwitchOriginId = drawerSwitchCase.page._state.originStationId;
+drawerSwitchCase.page._scheduleStationWheelLayout = () => {};
+drawerSwitchCase.page._scheduleSyncForVisibleStation = () => {};
+drawerSwitchCase.page._updateSyncStatus = () => {};
+drawerSwitchCase.page.onOpenRestroomDrawer({
+  currentTarget: { dataset: { stationId: drawerSwitchStation.id } },
+});
+const drawerLine1Group = drawerSwitchCase.page.data.drawerGroups.find(
+  (group) => group.lineId === '1',
+);
+drawerSwitchCase.page.onSelectDrawerLine({
+  currentTarget: {
+    dataset: {
+      lineId: drawerLine1Group.lineId,
+      stationId: drawerLine1Group.stationId,
+    },
+  },
+});
+assert.strictEqual(drawerSwitchCase.page._state.lineId, '1', '抽屉线路标题必须实际切至目标线路');
+assert.strictEqual(
+  drawerSwitchCase.page._rawStations[drawerSwitchCase.page.data.currentIndex].name,
+  '上海火车站',
+  '非中心卡抽屉切线后必须将该卡对应的物理站置于中心',
+);
+assert.strictEqual(
+  drawerSwitchCase.page._state.originStationId,
+  drawerSwitchOriginId,
+  '抽屉切线不得修改计算起点',
+);
 
 const singleRestroomCase = createPage('3', 'forward', '东宝兴路');
 const singleRestroomCard = singleRestroomCase.page._decorateStations(
@@ -960,9 +1212,34 @@ assert(/\.control-chevron\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;[^
 assert(homepageWxml.includes('sync-action__icon'), '更新入口必须包含刷新图标');
 assert(homepageWxml.includes('sync-action__icon--spinning'), '刷新图标必须在更新期间进入旋转状态');
 assert(!homepageWxml.includes('>检查更新</button>'), '同步入口不得继续使用旧长胶囊文案');
-assert(homepageWxml.includes('catchtap="onSelectTransferLine"'), '换乘线路胶囊必须可点击且阻止整卡事件冒泡');
-assert(!homepageWxml.includes('bindtap="onSelectTransferLine"'), '整卡可点击后换乘胶囊不得继续冒泡');
-assert(/wx:elif="\{\{station\.hasRestroom\}\}"[^>]*role="button"[^>]*data-station-id="\{\{station\.id\}\}"[^>]*bindtap="onOpenRestroomDrawer"/.test(homepageWxml), '任意有厕卡片必须以整卡热区打开位置抽屉');
+assert(!homepageWxml.includes('onSelectTransferLine'), '卡内换乘胶囊必须保持静态，不得抢占整卡详情热区');
+assert(/wx:elif="\{\{station\.hasRestroom\}\}"[^>]*data-station-id="\{\{station\.id\}\}"[^>]*bindtap="onOpenRestroomDrawer"/.test(homepageWxml), '任意有厕卡片必须保留整卡热区打开位置抽屉');
+assert(homepageWxml.includes('class="station-card__accessible-detail" role="button"'), '厕所详情必须提供与换乘控件平级的独立无障碍按钮');
+assert(!/wx:elif="\{\{station\.hasRestroom\}\}"[^>]*role="button"/.test(homepageWxml), '包含换乘控件的整卡容器不得继续形成嵌套按钮语义');
+assert(!homepageWxml.includes('左右滑动换线'), '卡片内不得再常驻重复的左右滑动文案');
+assert(homepageWxml.includes('<text class="wheel-tip">点圆点定起点</text><text class="wheel-tip">横滑换线</text>'), '轮盘标题两侧必须使用同级弱提示，并精炼说明圆点与横滑两种操作');
+assert(homepageWxml.includes('station.transferLineOptions'), '换乘区域必须使用包含当前线路的固定顺序选项');
+assert(!homepageWxml.includes('station.isActive && station.transferLineOptions'), '非焦点换乘卡也必须常态显示线路胶囊');
+assert(!homepageJs.includes('transferNodePrototype'), 'V1 不得残留世纪大道地图式换乘节点逻辑');
+assert(!homepageWxml.includes('transfer-node-map'), 'V1 不得渲染世纪大道地图式换乘节点');
+assert(!homepageWxss.includes('.transfer-node-map'), 'V1 不得残留地图式换乘节点样式');
+assert(!homepageWxml.includes('transfer-pill__mark'), '换乘胶囊不得继续显示线路短横线');
+assert(!homepageWxss.includes('.transfer-pill__mark'), '换乘胶囊不得残留短横线样式');
+assert(homepageWxml.includes('role="text" aria-label="{{station.transferSummaryAriaLabel}}"'), '静态换乘胶囊组必须提供一个完整的无障碍摘要');
+assert(homepageWxml.includes('color: {{transferLine.lineTextColor}};'), '换乘胶囊边框和文字必须使用线路可读色');
+assert(!homepageWxml.includes('transfer-pill--current'), '换乘胶囊不得再设置灰色选中态');
+assert(!homepageWxss.includes('.transfer-pill--current'), '样式层不得残留当前线路选中态');
+assert(homepageWxml.includes('class="transfer-swipe-cue transfer-swipe-cue--left"'), '手指右滑时必须在左侧显示错位提示');
+assert(homepageWxml.includes('class="transfer-swipe-cue transfer-swipe-cue--right"'), '手指左滑时必须在右侧显示错位提示');
+assert(homepageWxml.includes('<text class="transfer-swipe-cue__action">右滑切至</text>'), '左侧动态提示必须说明右滑结果');
+assert(homepageWxml.includes('<text class="transfer-swipe-cue__action">左滑切至</text>'), '右侧动态提示必须说明左滑结果');
+assert(homepageJs.includes('workletTiming(0, timingConfig)'), '未达门槛或手势结束后必须用 Worklet 平滑回退');
+assert(homepageJs.includes('getTransferSwipeMotion'), '换乘遮罩必须在 UI 线程连续跟随横滑进度');
+assert(!homepageJs.includes('已切至${option.name}'), '滑动动画已说明目标线路，切换后不得重复弹出提示');
+assert(homepageWxml.includes('class="station-anchor-hit" role="button"'), '圆点必须有独立的透明放大热区');
+assert(!/class="station-dot"[^>]*tap="onSetManualAnchor"/.test(homepageWxml), '可见圆点不得继续承担狭小点击区');
+assert(/\.station-anchor-hit\s*\{[^}]*width:\s*112rpx;/.test(homepageWxss), '起点热区必须宽于 88rpx 无障碍最小尺寸');
+assert(homepageJs.includes('_lineViewStateById'), '同站切线必须按线路保存本次会话的路径与方向');
 assert(homepageWxml.includes('{{station.restroomCapsuleLabel}}'), '有厕卡片必须显示卫生间状态胶囊');
 assert(homepageJs.includes("hasMultipleRestroomRecords ? '卫生间 · 多处' : '卫生间'"), '卫生间胶囊必须按同站区域聚合记录区分单处与多处');
 assert(!homepageWxml.includes('>WC</text>'), '卫生间胶囊不得继续使用 WC 文案');
@@ -976,15 +1253,16 @@ assert(homepageWxml.includes('class="route-switch"'), '支线线路顶部必须�
 assert(homepageWxml.includes('alternateRouteActionLabel'), '顶部支线入口必须使用目录统一生成的操作文案');
 assert(homepageJs.includes('alternateRouteActionLabel:'), '首页状态必须向顶部支线入口提供统一操作文案');
 assert(!homepageWxml.includes('class="route-pill'), '支线路径不得继续用两枚并列胶囊占用顶部空间');
-assert(homepageWxml.includes('station.branchHint'), '弱分叉提示必须由拓扑数据驱动');
-assert(homepageWxml.includes('<block wx:for="{{stations}}"'), '站点循环必须允许在相邻站点之间插入零高度支线锚点');
-assert(/wx:if="\{\{station\.branchHint\}\}" list-item class="branch-switch-anchor"/.test(homepageWxml), '支线入口必须作为站点行之后的独立中点锚点，不得继续叠在卡片或轨道列内');
+assert(homepageJs.includes('incomingBranchHint:'), '弱分叉提示必须从上一站拓扑数据派生到下一站行');
+assert(homepageWxml.includes('<block wx:for="{{stations}}"'), '站点循环必须保持固定站点行结构');
+assert(/wx:if="\{\{station\.incomingBranchHint\}\}" class="branch-switch-anchor"/.test(homepageWxml), '支线入口必须挂载在下一站的定高行顶部，避免 Skyline 零高度列表项丢失点击');
 assert(homepageWxml.includes('class="branch-switch-slot"'), '支线入口必须使用独立半高切换位');
 assert(homepageWxml.includes('class="branch-switch-slot__diagonal"'), '支线切换位必须先从主轨向右下引出 45 度斜线');
 assert(homepageWxml.includes('class="branch-switch-slot__horizontal"'), '支线切换位必须在斜线后继续水平延伸');
 assert(homepageWxml.includes('class="branch-switch-slot__label"'), '支线切换位必须显示另一端点名称');
-assert(homepageWxml.includes('{{station.branchHint.actionLabel}}'), '站间支线入口必须使用目录统一生成的操作文案');
-assert(!homepageWxml.includes('切换至{{station.branchHint.terminalName}}'), '站间支线入口不得继续自行拼接旧文案');
+assert(homepageWxml.includes('{{station.incomingBranchHint.actionLabel}}'), '站间支线入口必须使用目录统一生成的操作文案');
+assert(!homepageWxml.includes('切换至{{station.incomingBranchHint.terminalName}}'), '站间支线入口不得继续自行拼接旧文案');
+assert(/class="branch-switch-slot"[^>]*bindtap="onSelectRoute"/.test(homepageWxml), '站间支线入口必须绑定可触发的普通点击事件');
 assert(homepageWxml.includes('hover-class="branch-switch-slot--pressed"'), '支线快捷入口必须提供按压反馈');
 assert(homepageWxml.includes('class="route-end-cap'), '非环线必须在轨道真实端点显示同心圆收口');
 assert((homepageWxml.match(/class="route-end-cap route-end-cap--(?:top|bottom)"[^>]*style="height: \{\{wheelSlotHeight\}\}px;"/g) || []).length === 2, '普通线路两端必须各延伸一个完整站间距');
@@ -1008,8 +1286,16 @@ assert(homepageJs.includes('wheelRebase'), '方向切换必须使用连续位置
 assert(!homepageJs.includes("option.type === 'branched' ? '' : option.defaultRouteId"), '进入支线线路不得再清空默认路径');
 assert(homepageJs.includes('onLoopBoundaryTap'), '首页必须实现环线首尾跳转');
 assert(homepageWxml.includes('wx:for="{{drawerGroups}}"'), '多厕所抽屉必须按线路分组');
+assert(homepageWxml.includes('drawer-count">卫生间位置信息 · 完整来源描述</text>'), '详情弹窗必须统一使用卫生间文案');
+assert(!homepageWxml.includes('drawer-count">厕所位置信息'), '详情弹窗不得继续混用厕所文案');
+assert(/class="drawer-item__switch"[^>]*catchtap="onSelectDrawerLine"/.test(homepageWxml), '卫生间详情卡右上角必须支持直接切线');
+assert(homepageWxml.includes('data-station-id="{{group.stationId}}"'), '抽屉切线必须使用分组自身线路站点 ID');
+assert(homepageWxml.includes('wx:if="{{!group.isCurrent && restroomIndex === 0}}" class="drawer-item__switch"'), '每个非当前线路分组只在第一张灰色详情卡显示切换入口');
+assert(!homepageWxml.includes('drawer-group__header--action'), '线路分组标题必须保持静态，不得把切换入口放在灰色卡片外');
+assert(homepageWxml.includes('hover-class="drawer-item__switch--pressed"'), '灰色详情卡内切换入口必须提供明确按压反馈');
+assert(homepageJs.includes('onSelectDrawerLine(event)'), '首页必须实现独立的抽屉线路切换处理');
 assert(homepageWxml.includes('信息有误？反馈'), '抽屉必须保留弱化反馈入口');
-assert(homepageWxml.includes('bindtap="onSetManualAnchor"'), '站点圆点必须可锁定手动起点');
+assert(homepageWxml.includes('class="station-anchor-hit" role="button" aria-label="将{{station.name}}设为计算起点" data-station-id="{{station.id}}" catchtap="onSetManualAnchor"'), '圆点放大热区必须可锁定手动起点且阻止误开卡片详情');
 assert(homepageWxml.includes('station.isSystemOrigin'), '站点圆点必须由智能定位状态驱动定位针');
 assert(homepageWxml.includes('选择起始线路'), '同一物理站无法稳定判定线路时必须弹出线路选择');
 assert(homepageWxml.includes("isManualSelectionGuide ? '先选择线路' : '选择浏览线路'"), '手动选择第一步必须复用线路面板并提供明确引导');
@@ -1046,12 +1332,12 @@ const stationRowRule = homepageWxss.match(/\.station-row\s*\{([^}]*)\}/);
 assert(stationRowRule, '缺少站点行样式');
 assert(!/opacity|transform/.test(stationRowRule[1]), '站点行不得缩放或改变透明度');
 assert(/position:\s*relative/.test(stationRowRule[1]), '站点行必须建立分支线路径的完整行定位基准');
-assert(/\.station-card-shell\s*\{[^}]*width:\s*calc\(100%\s*-\s*104rpx\)/.test(homepageWxss), '常规卡片必须使用独立宽度');
+assert(/\.station-card-shell\s*\{[^}]*width:\s*calc\(100%\s*-\s*112rpx\)/.test(homepageWxss), '非焦点卡片必须略短于原宽度，以突出第二焦点卡');
 assert(/\.station-card-shell--before-focus[^}]*translateY\(-14rpx\)/.test(homepageWxss), '焦点上方卡片必须增加间距');
 assert(/\.station-card-shell--after-focus[^}]*translateY\(14rpx\)/.test(homepageWxss), '焦点下方卡片必须增加间距');
-assert(/\.station-card-shell--active[^}]*scale3d\(1\.065,1\.055,1\)/.test(homepageWxss), '焦点卡片必须具有肉眼可见的 Dock 式横纵放大幅度');
-assert(/\.branch-switch-anchor\s*\{[^}]*position:\s*relative[^}]*z-index:\s*4[^}]*width:\s*100%[^}]*height:\s*0[^}]*overflow:\s*visible/.test(homepageWxss), '支线锚点必须固定在两个定高站点行的边界，且不得改变轮盘像素偏移');
-assert(/\.branch-switch-slot\s*\{[^}]*top:\s*0[^}]*left:\s*36rpx[^}]*width:\s*310rpx[^}]*height:\s*56rpx[^}]*translateY\(-50%\)/.test(homepageWxss), '支线切换位必须以自身一半高度锁定在相邻站点中点');
+assert(/\.station-card-shell--active[^}]*scale3d\(1\.08,1\.055,1\)/.test(homepageWxss), '焦点卡片必须补偿基础宽度收窄并保持肉眼可见的 Dock 式横纵放大幅度');
+assert(/\.branch-switch-anchor\s*\{[^}]*position:\s*absolute[^}]*z-index:\s*7[^}]*top:\s*0[^}]*left:\s*0[^}]*width:\s*100%[^}]*height:\s*56rpx[^}]*pointer-events:\s*none/.test(homepageWxss), '支线锚点必须固定在下一站定高行顶部，并覆盖圆点起点热区');
+assert(/\.branch-switch-slot\s*\{[^}]*top:\s*0[^}]*left:\s*36rpx[^}]*width:\s*310rpx[^}]*height:\s*56rpx[^}]*pointer-events:\s*auto/.test(homepageWxss), '支线切换位必须在非零高度站点行内恢复独立点击命中');
 assert(/\.branch-switch-slot__diagonal\s*\{[^}]*width:\s*28rpx[^}]*height:\s*5rpx[^}]*rotate\(45deg\)[^}]*transform-origin:\s*left center[^}]*opacity:\s*\.38/.test(homepageWxss), '支线起始段必须以左端为轴向右下旋转 45 度');
 assert(/\.branch-switch-slot__horizontal\s*\{[^}]*top:\s*33rpx[^}]*left:\s*20rpx[^}]*width:\s*200rpx[^}]*height:\s*5rpx[^}]*opacity:\s*\.38/.test(homepageWxss), '斜线末端必须无缝接入足够长的水平支线');
 assert(/\.branch-switch-slot__label\s*\{[^}]*font-size:\s*19rpx[^}]*white-space:\s*nowrap/.test(homepageWxss), '支线线目标文案必须保持简洁且不换行');
@@ -1074,10 +1360,15 @@ assert(/\.line-picker-pill\s*\{[^}]*border-radius:\s*999rpx/.test(homepageWxss),
 assert(/\.line-picker-list\s*\{[^}]*height:\s*55vh/.test(homepageWxss), '线路选择弹层列表必须具有明确高度');
 assert(/\.picker-list\s*\{[^}]*height:\s*55vh/.test(homepageWxss), '站点选择弹层列表必须具有明确高度');
 assert(/\.drawer-list\s*\{[^}]*height:\s*57vh/.test(homepageWxss), '厕所详情抽屉列表必须具有明确高度');
+assert(/\.drawer-item__switch\s*\{[^}]*position:\s*absolute[^}]*top:\s*8rpx[^}]*right:\s*12rpx[^}]*height:\s*64rpx[^}]*font-size:\s*25rpx/.test(homepageWxss), '切换入口必须位于灰色详情卡右上角，并使用更大的字号和点击高度');
 assert(/\.city-control\s*\{[^}]*border-radius:\s*999rpx/.test(homepageWxss), '城市入口必须使用胶囊样式');
 assert(/\.sync-bar--blue\s+\.sync-bar__dot[^}]*#007aff/.test(homepageWxss), '本地数据状态必须使用蓝色圆点');
 assert(/\.sync-bar--green\s+\.sync-bar__dot[^}]*#29a36a/.test(homepageWxss), '已同步状态必须使用绿色圆点');
 assert(/\.sync-bar__action\s*\{[^}]*background:\s*transparent/.test(homepageWxss), '更新入口不得使用胶囊底色');
+assert(/\.sync-bar__action\s*\{[^}]*position:\s*absolute[^}]*right:\s*0[^}]*margin:\s*0[^}]*padding:\s*0/.test(homepageWxss), '更新图标与文字必须贴齐同步栏右边界');
+assert(homepageWxml.includes('class="sync-action__label"'), '更新文字必须保留可单独核对的右对齐边界');
+assert(/\.sync-bar\s*\{[^}]*margin:\s*6rpx 10rpx 0/.test(homepageWxss), '更新入口右边界必须与轮盘右侧提示对齐');
+assert(/\.wheel-heading\s*\{[^}]*margin:\s*10rpx 10rpx 4rpx/.test(homepageWxss), '轮盘两侧辅助提示必须使用一致的左右边界');
 assert(homepageWxss.includes('@keyframes sync-spin'), '更新图标必须具有旋转关键帧');
 assert(!homepageWxss.includes('0 0 30rpx rgba(85,181,190'), '焦点卡片不得使用会被轮盘裁成矩形的外扩背光');
 assert(!/\.eta-label\s*\{[^}]*color:/.test(homepageWxss), 'ETA 不得继续使用固定红色');

@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
-  <title id="title">Metro洗手间头像定位标识测试</title>
+  <title id="title">Metro 洗手间头像定位标识测试</title>
   <desc id="desc">将轻立体定位 pin 标识叠加到地铁头像底图右下角的测试图。</desc>
   <defs>
     <linearGradient id="bg" x1="142.2" y1="99.6" x2="881.8" y2="938.7" gradientUnits="userSpaceOnUse">

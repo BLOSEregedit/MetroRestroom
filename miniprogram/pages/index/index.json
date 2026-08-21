@@ -3,7 +3,7 @@
   "componentFramework": "glass-easel",
   "navigationStyle": "custom",
   "disableScroll": true,
-  "navigationBarTitleText": "MetroRestroom",
+  "navigationBarTitleText": "Metro 洗手间",
   "navigationBarBackgroundColor": "#F6F7F8",
   "navigationBarTextStyle": "black",
   "backgroundColor": "#F6F7F8"

@@ -25,5 +25,9 @@
   <view class="section-title">数据纠错</view>
   <view class="settings-card correction-row" bindtap="onOpenCorrection"><view><view class="setting-title">反馈数据问题</view><view class="setting-description">纠正厕所位置、闸内外或设施信息</view></view><view class="chevron">›</view></view>
   <view class="section-title">关于</view>
-  <view class="settings-card about-row" bindtap="openAbout"><view><view class="setting-title">关于 MetroRestroom</view><view class="setting-description">数据来源与版本信息</view></view><view class="chevron">›</view></view>
+  <view class="settings-card">
+    <view class="about-row" bindtap="openAbout"><view><view class="setting-title">关于 Metro 洗手间</view><view class="setting-description">数据来源与版本信息</view></view><view class="chevron">›</view></view>
+    <view class="divider"></view>
+    <view class="about-row" bindtap="openDeveloperNote"><view><view class="setting-title">作者寄语</view><view class="setting-description">为什么做这个小程序</view></view><view class="chevron">›</view></view>
+  </view>
 </view>

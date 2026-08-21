@@ -11,6 +11,15 @@ function getReleaseVersion() {
   }
 }
 
+function returnToProfile() {
+  const pages = typeof getCurrentPages === 'function' ? getCurrentPages() : [];
+  if (pages.length > 1 && typeof wx.navigateBack === 'function') {
+    wx.navigateBack({ delta: 1 });
+    return;
+  }
+  wx.switchTab({ url: '/pages/profile/index' });
+}
+
 Page({
   data: {
     version: '',
@@ -26,5 +35,8 @@ Page({
         wx.showToast({ title: '许可链接已复制', icon: 'none' });
       },
     });
+  },
+  onBack() {
+    returnToProfile();
   },
 });

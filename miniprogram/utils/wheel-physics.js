@@ -1,4 +1,4 @@
-const FOCUS_SCALE_X = 0.065;
+const FOCUS_SCALE_X = 0.08;
 const FOCUS_SCALE_Y = 0.055;
 const FOCUS_GAP_RATIO = 0.11;
 const MAX_VELOCITY_SLOTS_PER_SECOND = 22;
@@ -53,10 +53,35 @@ function clampWheelVelocity(velocity, slotHeight) {
   return clamp(Number(velocity) || 0, -maximum, maximum);
 }
 
+function getTransferSwipeMotion(deltaX, deltaY, direction, threshold, gestureRatio) {
+  'worklet';
+  const x = Number(deltaX) || 0;
+  const y = Number(deltaY) || 0;
+  const minimum = Math.max(1, Number(threshold) || 1);
+  const ratio = Math.max(1, Number(gestureRatio) || 1);
+  const horizontal = Math.abs(x) > Math.abs(y) * ratio;
+  const signedDistance = direction < 0 ? -x : x;
+  const distance = horizontal ? Math.max(0, signedDistance) : 0;
+  const deadDistance = Math.min(8, minimum * 0.2);
+  const progress = clamp(
+    (distance - deadDistance) / Math.max(1, minimum - deadDistance),
+    0,
+    1,
+  );
+  const reveal = 1 - Math.pow(1 - progress, 3);
+  return {
+    progress,
+    reveal,
+    ready: distance >= minimum ? 1 : 0,
+    cardOffset: horizontal ? clamp(x, -minimum * 1.5, minimum * 1.5) * 0.32 : 0,
+  };
+}
+
 module.exports = {
   clamp,
   getCardMotion,
   getDetentIndex,
   getFocusStrength,
+  getTransferSwipeMotion,
   clampWheelVelocity,
 };

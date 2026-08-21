@@ -1,6 +1,6 @@
 <view class="about-page">
   <image class="about-mark" src="/images/logo.png" mode="aspectFit" />
-  <view class="about-title">MetroRestroom</view>
+  <view class="about-title">Metro 洗手间</view>
   <view class="about-subtitle">地铁厕所查询</view>
 
   <view class="about-card">
@@ -19,4 +19,6 @@
     <text class="source-copy">站点坐标数据 © OpenStreetMap contributors，依据 Open Database License（ODbL）1.0 使用。</text>
     <view class="source-link" bindtap="onCopyOsmLicense">{{osmLicenseUrl}}<text class="source-link__action">复制</text></view>
   </view>
+
+  <view class="page-back-action" hover-class="page-back-action--pressed" bindtap="onBack" aria-role="button" aria-label="返回我的">返回我的</view>
 </view>

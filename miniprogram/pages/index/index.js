@@ -26,11 +26,14 @@ const {
   clampWheelVelocity,
   getCardMotion,
   getDetentIndex,
+  getTransferSwipeMotion,
 } = require('../../utils/wheel-physics');
 
 const workletApi = typeof wx !== 'undefined' && wx.worklet ? wx.worklet : null;
 const runOnJS = workletApi && workletApi.runOnJS;
 const scrollViewContext = workletApi && workletApi.scrollViewContext;
+const workletTiming = workletApi && workletApi.timing;
+const workletEasing = workletApi && workletApi.Easing;
 
 const SYNC_CITY_ID = 'shanghai';
 const SYNC_BUNDLE_SCHEMA = 1;
@@ -211,6 +214,7 @@ Page({
     this._locationRequestToken = 0;
     this._hasConfirmedLocation = Boolean(initialState.lastLocationStation);
     this._explicitLineId = '';
+    this._lineViewStateById = Object.create(null);
     this._pendingLocationMatch = null;
     this._pendingLocationPosition = null;
     this._feedback = createStationFeedback({
@@ -338,17 +342,24 @@ Page({
     this._wheelScrollRef = workletApi.shared();
     this._wheelHorizontalX = workletApi.shared(0);
     this._wheelHorizontalY = workletApi.shared(0);
+    this._wheelHorizontalDidSuppressTap = workletApi.shared(0);
   },
 
   _clearStationAnimatedStyles() {
     if (typeof this.clearAnimatedStyle !== 'function') return;
     const count = Number(this._boundStationStyleCount) || 0;
     for (let index = 0; index < count; index += 1) {
-      try {
-        this.clearAnimatedStyle(`#station-card-${index}`);
-      } catch (error) {
-        // 节点已被线路切换移除时无需额外处理。
-      }
+      [
+        `#station-card-${index}`,
+        `#transfer-swipe-right-${index}`,
+        `#transfer-swipe-left-${index}`,
+      ].forEach((selector) => {
+        try {
+          this.clearAnimatedStyle(selector);
+        } catch (error) {
+          // 节点已被线路切换移除时无需额外处理。
+        }
+      });
     }
     this._boundStationStyleCount = 0;
   },
@@ -358,6 +369,8 @@ Page({
     this._clearStationAnimatedStyles();
     const position = this._wheelPosition;
     const slotHeight = this._wheelSlotHeight;
+    const horizontalX = this._wheelHorizontalX;
+    const horizontalY = this._wheelHorizontalY;
     const stationCount = Math.max(0, Number(count) || 0);
 
     for (let index = 0; index < stationCount; index += 1) {
@@ -366,13 +379,59 @@ Page({
         this.applyAnimatedStyle(`#station-card-${stationIndex}`, () => {
           'worklet';
           const motion = getCardMotion(stationIndex - position.value, slotHeight.value);
+          const swipe = getTransferSwipeMotion(
+            horizontalX.value,
+            horizontalY.value,
+            horizontalX.value < 0 ? -1 : 1,
+            TRANSFER_SWIPE_PX,
+            HORIZONTAL_GESTURE_RATIO,
+          );
+          const horizontalOffset = swipe.cardOffset * motion.focus;
           return {
-            transform: `translateY(${motion.translateY}px) scale3d(${motion.scaleX},${motion.scaleY},1)`,
+            transform: `translateX(${horizontalOffset}px) translateY(${motion.translateY}px) scale3d(${motion.scaleX},${motion.scaleY},1)`,
             zIndex: 1 + Math.round(motion.focus * 10),
           };
         });
       } catch (error) {
         // 极短线路切换窗口中节点可能尚未挂载，下一次布局会重新绑定。
+      }
+      try {
+        this.applyAnimatedStyle(`#transfer-swipe-right-${stationIndex}`, () => {
+          'worklet';
+          const motion = getCardMotion(stationIndex - position.value, slotHeight.value);
+          const swipe = getTransferSwipeMotion(
+            horizontalX.value,
+            horizontalY.value,
+            1,
+            TRANSFER_SWIPE_PX,
+            HORIZONTAL_GESTURE_RATIO,
+          );
+          return {
+            opacity: swipe.reveal * motion.focus,
+            transform: `translateX(${(swipe.reveal - 1) * 18}px) scale(${0.98 + (swipe.progress * 0.02) + (swipe.ready * 0.02)})`,
+          };
+        });
+      } catch (error) {
+        // 非换乘站没有右滑提示节点。
+      }
+      try {
+        this.applyAnimatedStyle(`#transfer-swipe-left-${stationIndex}`, () => {
+          'worklet';
+          const motion = getCardMotion(stationIndex - position.value, slotHeight.value);
+          const swipe = getTransferSwipeMotion(
+            horizontalX.value,
+            horizontalY.value,
+            -1,
+            TRANSFER_SWIPE_PX,
+            HORIZONTAL_GESTURE_RATIO,
+          );
+          return {
+            opacity: swipe.reveal * motion.focus,
+            transform: `translateX(${(1 - swipe.reveal) * 18}px) scale(${0.98 + (swipe.progress * 0.02) + (swipe.ready * 0.02)})`,
+          };
+        });
+      } catch (error) {
+        // 非换乘站没有左滑提示节点。
       }
     }
     this._boundStationStyleCount = stationCount;
@@ -504,6 +563,9 @@ Page({
     this._wheelSnapAttempts.value = 0;
     this._wheelSession.value = nextSession;
     this._wheelSequence.value = 0;
+    if (this._wheelHorizontalX) this._wheelHorizontalX.value = 0;
+    if (this._wheelHorizontalY) this._wheelHorizontalY.value = 0;
+    if (this._wheelHorizontalDidSuppressTap) this._wheelHorizontalDidSuppressTap.value = 0;
     if (this._feedback) this._feedback.reset();
   },
 
@@ -722,6 +784,7 @@ Page({
     const alternateRoute = routeOptions.find((item) => item.id !== this._state.routeId) || {};
 
     const lineColor = getLineColor(homeView.line);
+    const decoratedStations = this._decorateStations(rawStations, currentIndex, lineColor);
     const patch = {
       lineId: this._state.lineId,
       lineName: getLineName(homeView.line, this._state.lineId),
@@ -741,7 +804,7 @@ Page({
       loopPreviousStationName: rawStations.length ? rawStations[rawStations.length - 1].name : '',
       loopNextStationName: rawStations.length ? rawStations[0].name : '',
       currentIndex,
-      stations: this._decorateStations(rawStations, currentIndex, lineColor),
+      stations: decoratedStations,
     };
     if (canRebaseWheel) {
       const slotHeight = Number(this.data.wheelSlotHeight);
@@ -754,9 +817,9 @@ Page({
     this.setData(patch, () => {
       if (canRebaseWheel) {
         this._bindStationAnimatedStyles(rawStations.length);
-        return;
+      } else {
+        this._scheduleStationWheelLayout();
       }
-      this._scheduleStationWheelLayout();
     });
     this._updateSyncStatus();
     if (!(options && options.skipSync)) this._scheduleSyncForVisibleStation(0);
@@ -818,6 +881,8 @@ Page({
       const hasRestroomRecords = restrooms.length > 0;
       const hasMultipleRestroomRecords = restrooms.length > 1;
       const wayfindingSummary = primaryRestroom && primaryRestroom.wayfindingSummary;
+      const transferLineOptions = this._buildTransferLineOptions(station, lineColor);
+      const transferSwipeTargets = this._buildTransferSwipeTargets(station.transfers);
       return Object.assign({}, station, {
         restrooms,
         primaryRestroom,
@@ -836,8 +901,79 @@ Page({
         isOrigin: station.id === this._state.originStationId,
         isSystemOrigin: !this.data.isManualAnchor && station.id === this._systemOriginStationId,
         dotStyle: `border-color: ${lineColor};`,
+        incomingBranchHint: index > 0 ? stations[index - 1].branchHint : null,
+        transferLineOptions,
+        transferSummaryAriaLabel: transferLineOptions.length > 1
+          ? `${station.name}经过${transferLineOptions.map((item) => item.lineName).join('、')}`
+          : '',
+        transferSwipeLeft: transferSwipeTargets.left,
+        transferSwipeRight: transferSwipeTargets.right,
       });
     });
+  },
+
+  _buildTransferLineOptions(station, lineColor) {
+    const currentLineId = this._state && this._state.lineId;
+    const lineOptions = this.data.lineOptions || [];
+    const orderByLineId = lineOptions.reduce((result, option, index) => {
+      result[option.id] = index;
+      return result;
+    }, Object.create(null));
+    const currentOption = lineOptions.find((option) => option.id === currentLineId) || {};
+    const source = [{
+      lineId: currentLineId,
+      lineName: currentOption.name || this.data.lineName || currentLineId,
+      lineColor: currentOption.color || lineColor,
+      stationId: station.id,
+    }].concat(station.transfers || []);
+    const seen = Object.create(null);
+    return source.filter((item) => {
+      if (!item || !item.lineId || seen[item.lineId]) return false;
+      seen[item.lineId] = true;
+      return true;
+    }).sort((left, right) => {
+      const leftOrder = Object.prototype.hasOwnProperty.call(orderByLineId, left.lineId)
+        ? orderByLineId[left.lineId]
+        : Number.MAX_SAFE_INTEGER;
+      const rightOrder = Object.prototype.hasOwnProperty.call(orderByLineId, right.lineId)
+        ? orderByLineId[right.lineId]
+        : Number.MAX_SAFE_INTEGER;
+      return leftOrder - rightOrder || String(left.lineId).localeCompare(
+        String(right.lineId),
+        'zh-CN',
+        { numeric: true },
+      );
+    }).map((item) => {
+      const option = lineOptions.find((candidate) => candidate.id === item.lineId) || {};
+      const isCurrent = item.lineId === currentLineId;
+      const lineName = item.lineName || option.name || item.lineId;
+      const lineColorValue = item.lineColor || option.color || '#77808A';
+      return Object.assign({}, item, {
+        lineName,
+        lineColor: lineColorValue,
+        lineTextColor: option.textColor || getReadableLineColor(lineColorValue),
+        isCurrent,
+      });
+    });
+  },
+
+  _buildTransferSwipeTargets(transfers) {
+    const decorate = (transfer) => {
+      if (!transfer) return null;
+      const option = (this.data.lineOptions || []).find(
+        (item) => item.id === transfer.lineId,
+      ) || {};
+      const lineColor = transfer.lineColor || option.color || '#77808A';
+      return Object.assign({}, transfer, {
+        lineName: transfer.lineName || option.name || transfer.lineId,
+        lineColor,
+        lineTextColor: option.textColor || getReadableLineColor(lineColor),
+      });
+    };
+    return {
+      left: decorate(this._getAdjacentTransfer(transfers, 1)),
+      right: decorate(this._getAdjacentTransfer(transfers, -1)),
+    };
   },
 
   _startOperationalStatusClock() {
@@ -1282,9 +1418,14 @@ Page({
     );
     const changed = currentIndex !== this.data.currentIndex;
     if (!changed) return;
+    const decoratedStations = this._decorateStations(
+      this._rawStations,
+      currentIndex,
+      this.data.lineColor,
+    );
     this.setData({
       currentIndex,
-      stations: this._decorateStations(this._rawStations, currentIndex, this.data.lineColor),
+      stations: decoratedStations,
     });
     this._updateSyncStatus();
     this._scheduleSyncForVisibleStation(320);
@@ -1324,19 +1465,40 @@ Page({
     if (event.state === 1) {
       this._wheelHorizontalX.value = 0;
       this._wheelHorizontalY.value = 0;
+      this._wheelHorizontalDidSuppressTap.value = 0;
       return;
     }
     if (event.state === 2) {
       this._wheelHorizontalX.value += event.deltaX;
       this._wheelHorizontalY.value += event.deltaY;
+      if (!this._wheelHorizontalDidSuppressTap.value
+        && Math.abs(this._wheelHorizontalX.value) > 8
+        && Math.abs(this._wheelHorizontalX.value)
+          > Math.abs(this._wheelHorizontalY.value) * HORIZONTAL_GESTURE_RATIO) {
+        this._wheelHorizontalDidSuppressTap.value = 1;
+        runOnJS(this.onWheelHorizontalDragStart.bind(this))();
+      }
       return;
     }
     if (event.state === 3) {
       const finish = this.onWheelHorizontalSwipe.bind(this);
       runOnJS(finish)(this._wheelHorizontalX.value, this._wheelHorizontalY.value);
     }
-    this._wheelHorizontalX.value = 0;
-    this._wheelHorizontalY.value = 0;
+    const easing = workletEasing && workletEasing.out
+      ? workletEasing.out(workletEasing.cubic)
+      : undefined;
+    const timingConfig = easing ? { duration: 160, easing } : { duration: 160 };
+    this._wheelHorizontalX.value = workletTiming
+      ? workletTiming(0, timingConfig)
+      : 0;
+    this._wheelHorizontalY.value = workletTiming
+      ? workletTiming(0, timingConfig)
+      : 0;
+    this._wheelHorizontalDidSuppressTap.value = 0;
+  },
+
+  onWheelHorizontalDragStart() {
+    this._suppressCardTapUntil = Date.now() + 360;
   },
 
   onWheelHorizontalSwipe(payload, rawDeltaY) {
@@ -1349,6 +1511,7 @@ Page({
     if (Math.abs(deltaX) < TRANSFER_SWIPE_PX
       || Math.abs(deltaX) <= Math.abs(deltaY) * HORIZONTAL_GESTURE_RATIO) return;
     this._suppressCardTapUntil = Date.now() + 320;
+    if (!this._isWheelSettledForTransfer()) return;
 
     const station = (this._rawStations || []).find(
       (item) => item.id === ((payload && payload.stationId) || this._visibleStationId()),
@@ -1369,42 +1532,72 @@ Page({
     );
     if (!currentLineId || !transferList.length) return null;
 
+    const orderByLineId = (this.data.lineOptions || []).reduce((result, option, index) => {
+      result[option.id] = index;
+      return result;
+    }, Object.create(null));
     const lineIds = [currentLineId].concat(transferList.map((transfer) => transfer.lineId))
-      .sort((left, right) => String(left).localeCompare(String(right), 'zh-CN', { numeric: true }));
+      .sort((left, right) => {
+        const leftOrder = Object.prototype.hasOwnProperty.call(orderByLineId, left)
+          ? orderByLineId[left]
+          : Number.MAX_SAFE_INTEGER;
+        const rightOrder = Object.prototype.hasOwnProperty.call(orderByLineId, right)
+          ? orderByLineId[right]
+          : Number.MAX_SAFE_INTEGER;
+        return leftOrder - rightOrder
+          || String(left).localeCompare(String(right), 'zh-CN', { numeric: true });
+      });
     const currentIndex = lineIds.indexOf(currentLineId);
+    if (lineIds.length === 2) return transferList[0];
     const offset = step < 0 ? -1 : 1;
-    const targetLineId = lineIds[(currentIndex + offset + lineIds.length) % lineIds.length];
+    const targetIndex = currentIndex + offset;
+    if (targetIndex < 0 || targetIndex >= lineIds.length) return null;
+    const targetLineId = lineIds[targetIndex];
     return transferList.find((transfer) => transfer.lineId === targetLineId) || null;
   },
 
-  onSelectTransferLine(event) {
-    const dataset = (event.currentTarget && event.currentTarget.dataset) || {};
-    const station = (this._rawStations || []).find((item) => item.id === this._visibleStationId());
-    if (!station) return;
-    const targetStationId = dataset.transferStationId || dataset.stationId;
-    const transfer = (station.transfers || []).find((item) => (
-      item.lineId === dataset.lineId
-      && (!targetStationId || item.stationId === targetStationId)
-    ));
-    if (transfer) this._switchToTransfer(transfer);
+  _isWheelSettledForTransfer() {
+    if (!this._wheelPhase || !this._wheelPosition || !this._wheelSettledIndex) return true;
+    const phase = Number(this._wheelPhase.value);
+    const position = Number(this._wheelPosition.value);
+    const settledIndex = Number(this._wheelSettledIndex.value);
+    return (phase === WHEEL_PHASE_IDLE || phase === WHEEL_PHASE_RESETTING)
+      && Number.isFinite(position)
+      && Number.isFinite(settledIndex)
+      && Math.abs(position - settledIndex) <= WHEEL_SNAP_ERROR_DISTANCE
+      && Math.round(settledIndex) === Number(this.data.currentIndex);
   },
 
   _switchToTransfer(transfer) {
     const option = this.data.lineOptions.find((item) => item.id === transfer.lineId);
     if (!option) return;
+    const remembered = this._lineViewStateById && this._lineViewStateById[option.id];
+    const context = catalog.getStationContext(transfer.stationId, remembered);
+    if (!context) return;
 
     this._cancelPendingLocation();
+    this._rememberCurrentLineViewState();
     this._explicitLineId = option.id;
-    this._directionMode = 'default';
-    this._state.lineId = option.id;
-    this._state.direction = option.defaultDirection
-      || (option.directions && option.directions[0] && option.directions[0].id)
-      || 'forward';
-    this._state.routeId = option.defaultRouteId;
+    this._directionMode = context.directionMode;
+    this._state.lineId = context.lineId;
+    this._state.direction = context.direction;
+    this._state.routeId = context.routeId;
     this._refreshHomeView(transfer.stationId);
+    this._rememberCurrentLineViewState();
     this._saveCurrentPreferences();
-    this._addRecentRecord(this._rawStations[this.data.currentIndex], '换乘浏览');
-    wx.showToast({ title: `已切换至${option.name}`, icon: 'none' });
+    const activeStation = this._rawStations[this.data.currentIndex];
+    this._addRecentRecord(activeStation, '换乘浏览');
+  },
+
+  _rememberCurrentLineViewState() {
+    if (!this._state || !this._state.lineId) return;
+    if (!this._lineViewStateById) this._lineViewStateById = Object.create(null);
+    this._lineViewStateById[this._state.lineId] = {
+      lineId: this._state.lineId,
+      routeId: this._state.routeId,
+      direction: this._state.direction,
+      directionMode: this._directionMode || 'default',
+    };
   },
 
   onOpenLinePicker() {
@@ -1989,12 +2182,16 @@ Page({
         const lineColor = lineOption.color || '#1677ff';
         groupsByLine[lineId] = {
           lineId,
+          stationId: restroom.stationId || '',
           lineName: lineOption.name || restroom.lineName || `${lineId}号线`,
           lineColor,
           lineTextColor: lineOption.textColor || getReadableLineColor(lineColor),
           isCurrent: lineId === this._state.lineId,
           restrooms: [],
         };
+      }
+      if (!groupsByLine[lineId].stationId && restroom.stationId) {
+        groupsByLine[lineId].stationId = restroom.stationId;
       }
       groupsByLine[lineId].restrooms.push(Object.assign({}, restroom, {
         lineId,
@@ -2009,6 +2206,22 @@ Page({
 
   onCloseRestroomDrawer() {
     this.setData({ showRestroomDrawer: false });
+  },
+
+  onSelectDrawerLine(event) {
+    const dataset = (event.currentTarget && event.currentTarget.dataset) || {};
+    const lineId = String(dataset.lineId || '');
+    const group = (this.data.drawerGroups || []).find((item) => item.lineId === lineId);
+    if (!group || group.isCurrent) return;
+    const drawerStation = this.data.drawerStation || {};
+    const lineOption = (drawerStation.transferLineOptions || []).find(
+      (item) => item.lineId === lineId,
+    );
+    const stationId = dataset.stationId || group.stationId || (lineOption && lineOption.stationId);
+    if (!stationId) return;
+
+    this.setData({ showRestroomDrawer: false });
+    this._switchToTransfer({ lineId, stationId });
   },
 
   onCorrectRestroom(event) {
