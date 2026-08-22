@@ -1,15 +1,18 @@
 const catalog = require('../../data/catalog');
+const { getCity, normalizeCityId } = require('../../data/cities');
 const stationEntranceData = require('../../data/station-entrances');
 const stationLocationData = require('../../data/station-locations');
 const { createStationFeedback } = require('../../utils/feedback');
 const { normalizeFacilityTerms } = require('../../utils/display-copy');
 const { rankNearbyStations, resolveNearestEntranceLine } = require('../../utils/location');
 const {
+  requestAuthorizedCurrentPosition,
   requestCurrentPosition,
   openLocationSettings,
 } = require('../../utils/location-service');
 const {
   addRecentRecord,
+  getSavedCityId,
   getStationLineChoice,
   savePreferences,
   saveLastLocationStation,
@@ -70,13 +73,6 @@ const RESTROOM_STATUS_LABELS = Object.freeze({
 });
 const READABLE_TEXT_NEUTRAL = Object.freeze([31, 36, 41]);
 const MIN_LINE_TEXT_CONTRAST = 4.5;
-const SHARE_DEFAULT_HOME = Object.freeze({
-  lineId: '2',
-  routeId: 'l2-main',
-  direction: 'to-pudong-airport',
-  originStationId: 'l2-renmin-square',
-});
-const SHARE_DEFAULT_RESOLVED_ORIGIN_ID = 'l2-s019';
 
 function getLineName(line, lineId) {
   if (typeof line === 'string') return line;
@@ -154,10 +150,13 @@ function formatHomeSyncTime(timestamp, nowMs) {
     : formatted;
 }
 
-function getShareDefaultInitialState() {
-  const view = catalog.buildHomeView(SHARE_DEFAULT_HOME);
+function getCityLandmarkInitialState(cityId, personalState) {
+  const city = getCity(cityId);
+  const personal = personalState || {};
+  const view = catalog.buildHomeView(city.landmarkHome);
   return {
-    cityName: '上海',
+    cityId: city.id,
+    cityName: city.name,
     lineId: view.line.id,
     routeId: view.line.routeId,
     direction: view.direction,
@@ -168,13 +167,46 @@ function getShareDefaultInitialState() {
     visibleStationId: view.originStationId,
     locationStatus: 'notRequested',
     directionMode: 'default',
-    soundEnabled: false,
-    vibrationEnabled: false,
+    soundEnabled: personalState ? personal.soundEnabled !== false : false,
+    vibrationEnabled: personalState ? personal.vibrationEnabled !== false : false,
   };
+}
+
+function getShareInitialState(sharedCityId) {
+  const personal = catalog.getInitialHomeState();
+  const lastLocation = personal.lastLocationStation;
+  const context = lastLocation && catalog.getStationContext(
+    lastLocation.lineStationId,
+    personal,
+  );
+  if (context) {
+    const city = getCity(lastLocation.cityId || personal.cityId);
+    const view = catalog.buildHomeView({
+      lineId: context.lineId,
+      routeId: context.routeId,
+      direction: context.direction,
+      originStationId: context.lineStationId,
+    });
+    return Object.assign({}, personal, {
+      cityId: city.id,
+      cityName: city.name,
+      lineId: view.line.id,
+      routeId: view.line.routeId,
+      direction: view.direction,
+      originStationId: view.originStationId,
+      originMode: 'smart',
+      systemOriginStationId: view.originStationId,
+      visibleStationId: view.originStationId,
+      directionMode: context.directionMode || 'default',
+    });
+  }
+
+  return getCityLandmarkInitialState(getSavedCityId() || sharedCityId, personal);
 }
 
 Page({
   data: {
+    cityId: SYNC_CITY_ID,
     cityName: '上海',
     lineId: '',
     routeId: '',
@@ -234,12 +266,16 @@ Page({
     showDefaultOriginLabel: false,
   },
 
-  onLoad() {
-    const shareEntry = resolveShareEntry(this._getEnterOptions());
+  onLoad(options) {
+    const shareEntry = resolveShareEntry(this._getEnterOptions(), options);
+    this._shareEntry = shareEntry;
+    this._sharePageOptions = options || {};
     this._isTimelineSinglePage = shareEntry.isTimelineSinglePage;
     const initialState = this._isTimelineSinglePage
-      ? getShareDefaultInitialState()
-      : catalog.getInitialHomeState();
+      ? getCityLandmarkInitialState(shareEntry.cityId)
+      : (shareEntry.isShareEntry
+        ? getShareInitialState(shareEntry.cityId)
+        : catalog.getInitialHomeState());
     const navigationMetrics = this._getNavigationMetrics();
 
     this._state = {
@@ -252,6 +288,9 @@ Page({
     this._directionMode = initialState.directionMode || 'default';
     this._locationRequestToken = 0;
     this._hasConfirmedLocation = Boolean(initialState.lastLocationStation);
+    this._lastLocationStation = initialState.lastLocationStation || null;
+    this._hasShown = false;
+    this._shareAutoLocationStarted = false;
     this._explicitLineId = '';
     this._lineViewStateById = Object.create(null);
     this._pendingLocationMatch = null;
@@ -275,6 +314,8 @@ Page({
     });
 
     this.setData({
+      cityId: initialState.cityId || shareEntry.cityId,
+      cityName: initialState.cityName,
       navigationBarHeight: navigationMetrics.navigationBarHeight,
       statusBarHeight: navigationMetrics.statusBarHeight,
       lineOptions: normalizeLineOptions(catalog.getLineOptions()),
@@ -299,27 +340,56 @@ Page({
   onShow() {
     if (!this._state) return;
 
-    const shareEntry = resolveShareEntry(this._getEnterOptions());
-    if (this._isTimelineSinglePage
-      && !shareEntry.isTimelineSinglePage
-      && shareEntry.scene === TIMELINE_FULL_APP_SCENE) {
-      this._isTimelineSinglePage = false;
-      this.setData({ isTimelineSinglePage: false });
-    }
-    this._enableShareMenu();
-    if (this._isTimelineSinglePage) {
-      this._refreshHomeView(SHARE_DEFAULT_RESOLVED_ORIGIN_ID, { skipSync: true });
+    const latestShareEntry = resolveShareEntry(
+      this._getEnterOptions(),
+      this._sharePageOptions,
+    );
+    const shareEntry = latestShareEntry.isShareEntry
+      ? latestShareEntry
+      : (this._shareEntry || latestShareEntry);
+    if (latestShareEntry.isShareEntry) this._shareEntry = latestShareEntry;
+    if (!this._hasShown) {
+      this._hasShown = true;
+      this._enableShareMenu();
+      if (this._isTimelineSinglePage) {
+        const city = getCity(shareEntry.cityId);
+        this._refreshHomeView(city.landmarkStationId, { skipSync: true });
+        return;
+      }
+      this._startOperationalStatusClock();
+      this._startShareAutoLocation();
       return;
     }
 
-    const initialState = catalog.getInitialHomeState();
+    const enteredTimelineFullApp = this._isTimelineSinglePage
+      && !shareEntry.isTimelineSinglePage
+      && shareEntry.scene === TIMELINE_FULL_APP_SCENE;
+    if (enteredTimelineFullApp) {
+      this._isTimelineSinglePage = false;
+      this.setData({ isTimelineSinglePage: false });
+      this._shareAutoLocationStarted = false;
+    }
+    this._enableShareMenu();
+    if (this._isTimelineSinglePage) {
+      const city = getCity(shareEntry.cityId);
+      this._refreshHomeView(city.landmarkStationId, { skipSync: true });
+      return;
+    }
+
+    const initialState = enteredTimelineFullApp
+      ? getShareInitialState(shareEntry.cityId)
+      : catalog.getInitialHomeState();
     this._state = {
       lineId: initialState.lineId,
       direction: initialState.direction,
       originStationId: initialState.originStationId,
       routeId: initialState.routeId,
     };
+    this._lastLocationStation = initialState.lastLocationStation || null;
+    this._hasConfirmedLocation = Boolean(initialState.lastLocationStation);
     this.setData({
+      cityId: initialState.cityId || shareEntry.cityId,
+      cityName: initialState.cityName,
       isManualAnchor: initialState.originMode === 'manual',
       soundEnabled: initialState.soundEnabled !== false,
       vibrationEnabled: initialState.vibrationEnabled !== false,
@@ -333,16 +403,17 @@ Page({
         vibrationEnabled: initialState.vibrationEnabled,
       });
     }
-    this._refreshHomeView(this._visibleStationId());
+    this._refreshHomeView(initialState.visibleStationId);
     this._startOperationalStatusClock();
+    if (enteredTimelineFullApp) this._startShareAutoLocation();
   },
 
   onShareAppMessage() {
-    return getShareAppMessage();
+    return getShareAppMessage(this.data.cityId);
   },
 
   onShareTimeline() {
-    return getShareTimeline();
+    return getShareTimeline(this.data.cityId);
   },
 
   onHide() {
@@ -382,13 +453,26 @@ Page({
     });
   },
 
+  _startShareAutoLocation() {
+    if (this._shareAutoLocationStarted
+      || this._isTimelineSinglePage
+      || !this._shareEntry
+      || !this._shareEntry.isShareEntry) return;
+    this._shareAutoLocationStarted = true;
+    this._requestLocation(requestAuthorizedCurrentPosition, {
+      silent: true,
+      fallbackToLast: true,
+    });
+  },
+
   _isDefaultShareOrigin(initialState, shareEntry) {
+    const city = getCity(shareEntry && shareEntry.cityId);
     return Boolean(
       shareEntry
-      && shareEntry.isTimelineSinglePage
+      && shareEntry.isShareEntry
       && !initialState.lastLocationStation
       && initialState.originMode !== 'manual'
-      && initialState.originStationId === SHARE_DEFAULT_RESOLVED_ORIGIN_ID,
+      && initialState.originStationId === city.landmarkStationId,
     );
   },
 
@@ -1200,6 +1284,7 @@ Page({
   _saveCurrentPreferences(patch) {
     if (this._isTimelineSinglePage) return;
     savePreferences(Object.assign({
+      cityId: normalizeCityId(this.data.cityId),
       lineId: this._state.lineId,
       direction: this._state.direction,
       originStationId: this._state.originStationId,
@@ -1872,6 +1957,16 @@ Page({
     if (!this._hasConfirmedLocation || !this._systemOriginStationId) return false;
 
     const visibleStationId = this._visibleStationId();
+    const context = catalog.getStationContext(
+      this._systemOriginStationId,
+      Object.assign({}, this._state, { directionMode: this._directionMode }),
+    );
+    if (context) {
+      this._state.lineId = context.lineId;
+      this._state.routeId = context.routeId;
+      this._state.direction = context.direction;
+      this._directionMode = context.directionMode || 'default';
+    }
     this._state.originStationId = this._systemOriginStationId;
     this.setData({ isManualAnchor: false });
     this._refreshHomeView(visibleStationId || this._systemOriginStationId);
@@ -1929,6 +2024,7 @@ Page({
       distanceLabel: this._formatLocationDistance(pending.distanceMeters),
       proximity: pending.proximity,
       lowAccuracy: pending.lowAccuracy,
+      silent: pending.silent === true,
     }));
   },
 
@@ -1988,6 +2084,11 @@ Page({
       return;
     }
 
+    if (pending.silent) {
+      this._setLocationStatus(this._hasConfirmedLocation ? 'cached' : 'notRequested');
+      return;
+    }
+
     this.setData({
       locationCandidates: scopedOptions,
       locationPendingStationName: options[0].stationName,
@@ -1998,12 +2099,21 @@ Page({
   },
 
   onRequestLocation() {
+    return this._requestLocation(requestCurrentPosition);
+  },
+
+  _requestLocation(positionRequest, options) {
+    const requestOptions = options || {};
     if (this._isTimelineSinglePage) {
-      wx.showToast({ title: '进入小程序后可定位附近站点', icon: 'none' });
+      if (!requestOptions.silent) {
+        wx.showToast({ title: '进入小程序后可定位附近站点', icon: 'none' });
+      }
       return;
     }
     if (stationLocationData.dataReady !== true || !(stationLocationData.stations || []).length) {
-      wx.showToast({ title: '站点定位数据准备中', icon: 'none' });
+      if (!requestOptions.silent) {
+        wx.showToast({ title: '站点定位数据准备中', icon: 'none' });
+      }
       return;
     }
 
@@ -2020,16 +2130,24 @@ Page({
       locationPendingDistanceLabel: '',
     });
     this._setLocationStatus('locating');
-    requestCurrentPosition(wx).then((result) => {
+    positionRequest(wx).then((result) => {
       if (requestToken !== this._locationRequestToken) return;
 
       if (!result.ok) {
+        if (requestOptions.fallbackToLast) {
+          this._setLocationStatus(this._hasConfirmedLocation ? 'cached' : 'notRequested');
+          return;
+        }
         this._setLocationStatus(result.status, result.issue);
         return;
       }
 
       const match = rankNearbyStations(result.position, stationLocationData.stations);
       if (match.status === 'unmatched') {
+        if (requestOptions.fallbackToLast) {
+          this._setLocationStatus(this._hasConfirmedLocation ? 'cached' : 'notRequested');
+          return;
+        }
         this._setLocationStatus('unmatched');
         wx.showToast({ title: '当前定位 5 公里内无站点，请手动选择', icon: 'none' });
         return;
@@ -2040,6 +2158,10 @@ Page({
       }
 
       if (match.status === 'selectionRequired') {
+        if (requestOptions.fallbackToLast) {
+          this._setLocationStatus(this._hasConfirmedLocation ? 'cached' : 'notRequested');
+          return;
+        }
         this._pendingLocationPosition = result.position;
         const nearbyStationCandidates = match.candidates.map((physicalStation) => {
           const pending = Object.assign({}, physicalStation, {
@@ -2074,6 +2196,7 @@ Page({
         position: result.position,
         proximity: match.proximity,
         lowAccuracy: match.lowAccuracy,
+        silent: requestOptions.silent === true,
       });
       const options = this._locationOptionsForMatch(pending);
       if (!options.length) {
@@ -2083,7 +2206,10 @@ Page({
       this._pendingLocationMatch = pending;
       this._resolveLocationLineCandidate(pending);
     }).catch(() => {
-      if (requestToken === this._locationRequestToken) this._setLocationStatus('failed');
+      if (requestToken !== this._locationRequestToken) return;
+      this._setLocationStatus(
+        requestOptions.fallbackToLast && this._hasConfirmedLocation ? 'cached' : 'failed',
+      );
     });
   },
 
@@ -2103,7 +2229,8 @@ Page({
     this._state.routeId = candidate.routeId;
     this._state.direction = candidate.direction;
     this._state.originStationId = candidate.lineStationId;
-    saveLastLocationStation({
+    this._lastLocationStation = saveLastLocationStation({
+      cityId: normalizeCityId(this.data.cityId),
       lineStationId: candidate.lineStationId,
       physicalStationId: candidate.physicalStationId,
     });
@@ -2128,15 +2255,17 @@ Page({
       this._setLocationStatus('nearest', candidate.lowAccuracy ? 'lowAccuracy' : '', {
         distanceLabel: candidate.distanceLabel,
       });
-      wx.showToast({ title: '已按最近站计算，到站路程未计入', icon: 'none' });
+      if (!candidate.silent) {
+        wx.showToast({ title: '已按最近站计算，到站路程未计入', icon: 'none' });
+      }
     } else if (candidate.proximity === 'selectedNearby') {
       this._setLocationStatus('selectedNearby', candidate.lowAccuracy ? 'lowAccuracy' : '', {
         distanceLabel: candidate.distanceLabel,
       });
-      wx.showToast({ title: `已选择${candidate.stationName}`, icon: 'none' });
+      if (!candidate.silent) wx.showToast({ title: `已选择${candidate.stationName}`, icon: 'none' });
     } else {
       this._setLocationStatus('success');
-      wx.showToast({ title: `已定位到${candidate.stationName}`, icon: 'none' });
+      if (!candidate.silent) wx.showToast({ title: `已定位到${candidate.stationName}`, icon: 'none' });
     }
   },
 

@@ -820,6 +820,7 @@ assert.strictEqual(applyLocationCase.page._refreshedStationId, peopleSquare.id);
 assert.strictEqual(applyLocationCase.page.data.locationStatus, 'nearest');
 assert.strictEqual(applyLocationCase.page.data.locationLabel, '最近站 · 约 2.6 公里');
 const appliedLastLocation = storage.getLastLocationStation();
+assert.strictEqual(appliedLastLocation.cityId, 'shanghai');
 assert.strictEqual(appliedLastLocation.lineStationId, peopleSquare.id);
 assert.strictEqual(appliedLastLocation.physicalStationId, transferPhysical.physicalStationId);
 assert(appliedLastLocation.locatedAt > 0);

@@ -8,6 +8,7 @@ const {
   resolveNearestEntranceLine,
 } = require('../miniprogram/utils/location');
 const {
+  requestAuthorizedCurrentPosition,
   requestCurrentPosition,
   openLocationSettings,
 } = require('../miniprogram/utils/location-service');
@@ -260,6 +261,35 @@ async function validate() {
   });
   assert.strictEqual((await requestCurrentPosition(allowedApi)).ok, true);
 
+  let silentAuthorizeCalls = 0;
+  let silentLocationCalls = 0;
+  const silentlyAllowedApi = wxMock({
+    getSetting: ({ success }) => success({ authSetting: { 'scope.userLocation': true } }),
+    authorize: ({ success }) => {
+      silentAuthorizeCalls += 1;
+      success({});
+    },
+    getLocation: ({ success }) => {
+      silentLocationCalls += 1;
+      success({ latitude: 31.23, longitude: 121.47, accuracy: 20 });
+    },
+  });
+  assert.strictEqual((await requestAuthorizedCurrentPosition(silentlyAllowedApi)).ok, true);
+  assert.strictEqual(silentAuthorizeCalls, 0, '分享进入的静默定位不得重复触发授权');
+  assert.strictEqual(silentLocationCalls, 1);
+
+  const silentlyUnapprovedApi = wxMock({
+    getSetting: ({ success }) => success({ authSetting: {} }),
+    authorize: () => { silentAuthorizeCalls += 1; },
+    getLocation: () => { silentLocationCalls += 1; },
+  });
+  assert.strictEqual(
+    (await requestAuthorizedCurrentPosition(silentlyUnapprovedApi)).status,
+    'notAuthorized',
+  );
+  assert.strictEqual(silentAuthorizeCalls, 0, '未授权用户打开分享时不得弹出定位授权');
+  assert.strictEqual(silentLocationCalls, 1, '未授权用户不得调用 GPS');
+
   const deniedApi = wxMock({
     getPrivacySetting: ({ success }) => success({ needAuthorization: false }),
     getSetting: ({ success }) => success({ authSetting: { 'scope.userLocation': false } }),
@@ -285,7 +315,7 @@ async function validate() {
     openSetting: ({ success }) => success({ authSetting: { 'scope.userLocation': true } }),
   });
   assert.strictEqual(await openLocationSettings(settingApi), true);
-  console.log('定位逻辑验收通过：411 个物理站、561 条路线边、距离分层、5 公里附近站排序、入口选线、站外、授权、拒绝、超时和设置恢复。');
+  console.log('定位逻辑验收通过：411 个物理站、561 条路线边、距离分层、5 公里附近站排序、入口选线、静默授权复用、拒绝、超时和设置恢复。');
 }
 
 validate().catch((error) => {

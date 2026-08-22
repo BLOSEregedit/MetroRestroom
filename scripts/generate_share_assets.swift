@@ -48,7 +48,14 @@ func drawText(
   NSAttributedString(string: text, attributes: attributes).draw(in: rect)
 }
 
-func renderPNG(width: Int, height: Int, to url: URL, draw: () -> Void) throws {
+func renderPNG(
+  width: Int,
+  height: Int,
+  designWidth: CGFloat,
+  designHeight: CGFloat,
+  to url: URL,
+  draw: () -> Void
+) throws {
   guard let bitmap = NSBitmapImageRep(
     bitmapDataPlanes: nil,
     pixelsWide: width,
@@ -66,6 +73,10 @@ func renderPNG(width: Int, height: Int, to url: URL, draw: () -> Void) throws {
 
   NSGraphicsContext.saveGraphicsState()
   NSGraphicsContext.current = context
+  context.cgContext.scaleBy(
+    x: CGFloat(width) / designWidth,
+    y: CGFloat(height) / designHeight
+  )
   draw()
   context.flushGraphics()
   NSGraphicsContext.restoreGraphicsState()
@@ -77,7 +88,13 @@ func renderPNG(width: Int, height: Int, to url: URL, draw: () -> Void) throws {
 }
 
 func makeFriendImage() throws {
-  try renderPNG(width: 1000, height: 800, to: outputDirectory.appendingPathComponent("share-friend.png")) {
+  try renderPNG(
+    width: 600,
+    height: 480,
+    designWidth: 1000,
+    designHeight: 800,
+    to: outputDirectory.appendingPathComponent("share-friend.png")
+  ) {
     color(246, 247, 248).setFill()
     NSRect(x: 0, y: 0, width: 1000, height: 800).fill()
     roundedRect(NSRect(x: 54, y: 54, width: 892, height: 692), radius: 48, fill: .white)
@@ -86,22 +103,25 @@ func makeFriendImage() throws {
     logo.draw(in: NSRect(x: 112, y: 328, width: 230, height: 230))
     drawText("Metro 洗手间", in: NSRect(x: 112, y: 250, width: 260, height: 52), size: 34, weight: .semibold, textColor: color(31, 36, 41), alignment: .center)
 
-    drawText("先别出闸，\n查清再走", in: NSRect(x: 404, y: 332, width: 470, height: 190), size: 70, weight: .bold, textColor: color(31, 36, 41), lineHeight: 92)
-    drawText("闸内外 · 出入口 · 车头车尾 · 换乘通道", in: NSRect(x: 407, y: 248, width: 480, height: 52), size: 26, weight: .medium, textColor: color(77, 91, 103))
+    drawText("急用！", in: NSRect(x: 404, y: 428, width: 470, height: 88), size: 72, weight: .bold, textColor: color(0, 122, 255))
+    drawText("就别绕圈～", in: NSRect(x: 404, y: 330, width: 500, height: 92), size: 72, weight: .bold, textColor: color(31, 36, 41))
+    drawText("打开即用 · 位置一眼看清", in: NSRect(x: 407, y: 250, width: 480, height: 52), size: 29, weight: .medium, textColor: color(77, 91, 103))
+    roundedRect(NSRect(x: 407, y: 228, width: 116, height: 8), radius: 4, fill: color(0, 168, 143))
   }
 }
 
 func makeTimelineImage() throws {
-  try renderPNG(width: 1000, height: 1000, to: outputDirectory.appendingPathComponent("share-timeline.png")) {
-    color(246, 247, 248).setFill()
+  try renderPNG(
+    width: 600,
+    height: 600,
+    designWidth: 1000,
+    designHeight: 1000,
+    to: outputDirectory.appendingPathComponent("share-timeline.png")
+  ) {
+    color(248, 249, 250).setFill()
     NSRect(x: 0, y: 0, width: 1000, height: 1000).fill()
-    roundedRect(NSRect(x: 64, y: 64, width: 872, height: 872), radius: 56, fill: .white)
-    roundedRect(NSRect(x: 64, y: 64, width: 872, height: 14), radius: 7, fill: color(0, 122, 255))
 
-    logo.draw(in: NSRect(x: 382, y: 542, width: 236, height: 236))
-    drawText("Metro 洗手间", in: NSRect(x: 250, y: 470, width: 500, height: 52), size: 36, weight: .semibold, textColor: color(31, 36, 41), alignment: .center)
-    drawText("先别出闸，查清再走", in: NSRect(x: 130, y: 300, width: 740, height: 92), size: 64, weight: .bold, textColor: color(31, 36, 41), alignment: .center)
-    drawText("闸内外 · 出入口 · 车头车尾 · 换乘通道", in: NSRect(x: 150, y: 220, width: 700, height: 52), size: 28, weight: .medium, textColor: color(77, 91, 103), alignment: .center)
+    logo.draw(in: NSRect(x: 75, y: 75, width: 850, height: 850))
   }
 }
 

@@ -70,6 +70,46 @@ function requestCurrentPosition(api) {
     });
 }
 
+function requestAuthorizedCurrentPosition(api) {
+  return callWx(api, 'getSetting')
+    .then((setting) => {
+      const authorization = setting.authSetting && setting.authSetting['scope.userLocation'];
+      if (authorization !== true) {
+        return Promise.reject({ errMsg: 'getLocation:fail not authorized', notAuthorized: true });
+      }
+      return callWx(api, 'getLocation', {
+        type: 'wgs84',
+        isHighAccuracy: true,
+        highAccuracyExpireTime: 4000,
+      });
+    })
+    .then((result) => ({
+      ok: true,
+      position: {
+        latitude: Number(result.latitude),
+        longitude: Number(result.longitude),
+        accuracy: Number(result.accuracy) || 0,
+      },
+    }))
+    .catch((error) => {
+      if (error.notAuthorized) {
+        return {
+          ok: false,
+          status: 'notAuthorized',
+          issue: 'notAuthorized',
+          message: errorMessage(error),
+        };
+      }
+      const issue = locationIssue(error);
+      return {
+        ok: false,
+        status: issue === 'permissionDenied' || issue === 'privacyDenied' ? 'denied' : 'failed',
+        issue,
+        message: errorMessage(error),
+      };
+    });
+}
+
 function openLocationSettings(api) {
   return callWx(api, 'openSetting')
     .then((result) => Boolean(result.authSetting && result.authSetting['scope.userLocation']))
@@ -78,6 +118,7 @@ function openLocationSettings(api) {
 
 module.exports = {
   requestCurrentPosition,
+  requestAuthorizedCurrentPosition,
   openLocationSettings,
   locationIssue,
 };

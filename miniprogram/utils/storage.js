@@ -9,6 +9,7 @@ const STORAGE_KEYS = Object.freeze({
 });
 
 const DEFAULT_PREFERENCES = Object.freeze({
+  cityId: "shanghai",
   soundEnabled: true,
   vibrationEnabled: true,
   lineId: "2",
@@ -265,6 +266,13 @@ function getPreferences() {
   );
 }
 
+function getSavedCityId() {
+  const stored = readStorage(STORAGE_KEYS.preferences);
+  return isPlainObject(stored) && stored.cityId
+    ? String(stored.cityId)
+    : "";
+}
+
 function savePreferences(patch) {
   const next = Object.assign(
     {},
@@ -313,7 +321,7 @@ function clearRecentRecords() {
 function getLastLocationStation() {
   const stored = readStorage(STORAGE_KEYS.lastLocationStation);
   return isPlainObject(stored) && stored.lineStationId
-    ? Object.assign({}, stored)
+    ? Object.assign({ cityId: "shanghai" }, stored)
     : null;
 }
 
@@ -322,6 +330,7 @@ function saveLastLocationStation(station) {
     throw new TypeError("最近定位站必须包含 lineStationId");
   }
   const next = {
+    cityId: String(station.cityId || "shanghai"),
     lineStationId: String(station.lineStationId),
     physicalStationId: String(station.physicalStationId || ""),
     locatedAt: Number(station.locatedAt) || Date.now(),
@@ -390,6 +399,7 @@ module.exports = {
   STORAGE_KEYS,
   DEFAULT_PREFERENCES,
   getPreferences,
+  getSavedCityId,
   savePreferences,
   resetPreferences,
   getRecentRecords,

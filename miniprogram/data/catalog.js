@@ -975,6 +975,7 @@ function getInitialHomeState() {
     originStationId,
   });
   return {
+    cityId: preferences.cityId || 'shanghai',
     cityName: '上海',
     lineId: view.line.id,
     routeId: view.line.routeId,
