@@ -1,0 +1,20 @@
+<view class="sources-page">
+  <view class="sources-lead">
+    <view class="sources-kicker">可追溯的数据</view>
+    <view class="sources-title">每座城市，单独说明</view>
+    <text class="sources-copy">优先采用轨道交通运营方、政府部门和其他公开资料，并保留人工整理、AI 推导与实地核实之间的边界。</text>
+  </view>
+
+  <view class="section-label">按城市查看</view>
+  <view class="city-card" hover-class="city-card--pressed" bindtap="onOpenShanghai" aria-role="button" aria-label="查看上海数据来源">
+    <view class="city-card__accent"></view>
+    <view class="city-card__body">
+      <view class="city-card__name">上海</view>
+      <text class="city-card__summary">线路、站点、主支线、站间时分、卫生间与坐标</text>
+    </view>
+    <view class="city-card__chevron">›</view>
+  </view>
+
+  <text class="sources-footnote">后续增加其他城市时，会在这里分别列出对应城市的数据来源与核实进度。</text>
+  <view class="page-back-action" hover-class="page-back-action--pressed" bindtap="onBack" aria-role="button" aria-label="返回关于">返回关于</view>
+</view>

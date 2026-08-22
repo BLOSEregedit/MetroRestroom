@@ -1,0 +1,47 @@
+<view class="detail-page">
+  <view class="city-hero">
+    <view class="city-hero__eyebrow">上海</view>
+    <view class="city-hero__title">数据依据与计算边界</view>
+    <text class="city-hero__copy">以下说明对应当前上海数据。数据来源分为官方公开数据、其他公开数据、人工整理与 AI 推导，不把预估值写成实时官方结果。</text>
+    <view class="checked-pill">最近核对 {{checkedDate}}</view>
+  </view>
+
+  <view class="detail-section">
+    <view class="section-heading"><view class="section-title">线路与站点</view><view class="source-badge source-badge--official">官方公开</view></view>
+    <text class="section-copy">线路名称、站点、站序、换乘关系和运营状态，以上海地铁公开的线路与站点资料为基础，经人工整理和程序校验。</text>
+  </view>
+
+  <view class="detail-section">
+    <view class="section-heading"><view class="section-title">主线、支线与环线</view><view class="source-badge source-badge--official">官方公开</view></view>
+    <text class="section-copy">4 号线内外圈，以及 5、10、11 号线的路径、分岔点和服务方向，依据官方线路图、站序与运营方向整理。</text>
+  </view>
+
+  <view class="detail-section">
+    <view class="section-heading"><view class="section-title">站间预估时间</view><view class="source-badge source-badge--derived">官方计划＋AI 推导</view></view>
+    <text class="section-copy">相邻站乘车时间来自上海地铁公开路径时分，并按行驶方向分别保存；常态候车按公开的工作日平峰代表间隔折算为平均等待时间。</text>
+    <text class="section-copy section-copy--continued">最终结果还会加入换乘步行、换线候车和前往卫生间的时间，再统一显示为“约 N 分钟”。它不是实时到站时间，也不包含地面步行、进站和安检；节假日、临时调图和突发延误不在计算范围内。尚未取得实测值的换乘与卫生间步行时间，会使用统一默认值并继续等待实地核实。</text>
+  </view>
+
+  <view class="detail-section">
+    <view class="section-heading"><view class="section-title">卫生间位置</view><view class="source-badge source-badge--public">公开资料＋人工核对</view></view>
+    <text class="section-copy">现有位置说明来自官方资料和公开信息，经人工整理并保留来源原文。闸内外、是否需要出站、出口、车头车尾和换乘通道等细节，将继续按站实地核实；用户纠错较多的站点会优先复核。</text>
+  </view>
+
+  <view class="detail-section">
+    <view class="section-heading"><view class="section-title">站点与入口坐标</view><view class="source-badge source-badge--public">公开数据</view></view>
+    <text class="section-copy">站点及入口坐标来自 OpenStreetMap contributors，依据 Open Database License（ODbL）1.0 使用。坐标统一转换为 WGS84，并对入口与线路关系进行人工绑定和歧义检查。</text>
+  </view>
+
+  <view class="links-title">公开来源链接</view>
+  <view class="links-card">
+    <view wx:for="{{sourceLinks}}" wx:key="url" class="source-link-row" hover-class="source-link-row--pressed" data-index="{{index}}" bindtap="onCopySource" aria-role="button" aria-label="复制{{item.title}}来源链接">
+      <view class="source-link-row__body">
+        <view class="source-link-row__title">{{item.title}}</view>
+        <text class="source-link-row__publisher">{{item.publisher}}</text>
+      </view>
+      <view class="source-link-row__action">复制</view>
+    </view>
+  </view>
+
+  <view class="page-back-action" hover-class="page-back-action--pressed" bindtap="onBack" aria-role="button" aria-label="返回数据来源">返回数据来源</view>
+</view>

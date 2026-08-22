@@ -29,6 +29,12 @@ const {
   getDetentIndex,
   getTransferSwipeMotion,
 } = require('../../utils/wheel-physics');
+const {
+  TIMELINE_FULL_APP_SCENE,
+  getShareAppMessage,
+  getShareTimeline,
+  resolveShareEntry,
+} = require('../../utils/share');
 
 const workletApi = typeof wx !== 'undefined' && wx.worklet ? wx.worklet : null;
 const runOnJS = workletApi && workletApi.runOnJS;
@@ -64,6 +70,13 @@ const RESTROOM_STATUS_LABELS = Object.freeze({
 });
 const READABLE_TEXT_NEUTRAL = Object.freeze([31, 36, 41]);
 const MIN_LINE_TEXT_CONTRAST = 4.5;
+const SHARE_DEFAULT_HOME = Object.freeze({
+  lineId: '2',
+  routeId: 'l2-main',
+  direction: 'to-pudong-airport',
+  originStationId: 'l2-renmin-square',
+});
+const SHARE_DEFAULT_RESOLVED_ORIGIN_ID = 'l2-s019';
 
 function getLineName(line, lineId) {
   if (typeof line === 'string') return line;
@@ -141,6 +154,25 @@ function formatHomeSyncTime(timestamp, nowMs) {
     : formatted;
 }
 
+function getShareDefaultInitialState() {
+  const view = catalog.buildHomeView(SHARE_DEFAULT_HOME);
+  return {
+    cityName: '上海',
+    lineId: view.line.id,
+    routeId: view.line.routeId,
+    direction: view.direction,
+    originStationId: view.originStationId,
+    originMode: 'smart',
+    systemOriginStationId: view.originStationId,
+    lastLocationStation: null,
+    visibleStationId: view.originStationId,
+    locationStatus: 'notRequested',
+    directionMode: 'default',
+    soundEnabled: false,
+    vibrationEnabled: false,
+  };
+}
+
 Page({
   data: {
     cityName: '上海',
@@ -198,10 +230,16 @@ Page({
     syncTone: 'blue',
     syncMessage: '本地数据 · 尚未同步',
     syncActionLabel: '更新',
+    isTimelineSinglePage: false,
+    showDefaultOriginLabel: false,
   },
 
   onLoad() {
-    const initialState = catalog.getInitialHomeState();
+    const shareEntry = resolveShareEntry(this._getEnterOptions());
+    this._isTimelineSinglePage = shareEntry.isTimelineSinglePage;
+    const initialState = this._isTimelineSinglePage
+      ? getShareDefaultInitialState()
+      : catalog.getInitialHomeState();
     const navigationMetrics = this._getNavigationMetrics();
 
     this._state = {
@@ -226,7 +264,7 @@ Page({
     this._wheelFeedbackSequence = 0;
     this._wheelSettledSession = -1;
     this._unsubscribeSync = subscribeSyncState((event) => {
-      if (!this._state || event.cityId !== SYNC_CITY_ID) return;
+      if (this._isTimelineSinglePage || !this._state || event.cityId !== SYNC_CITY_ID) return;
       this._updateSyncStatus();
       if (event.phase === 'success') {
         const currentLineIds = this._currentSyncLineIds();
@@ -244,17 +282,35 @@ Page({
       soundEnabled: initialState.soundEnabled !== false,
       vibrationEnabled: initialState.vibrationEnabled !== false,
       locationDataReady: stationLocationData.dataReady === true,
+      isTimelineSinglePage: this._isTimelineSinglePage,
+      showDefaultOriginLabel: this._isDefaultShareOrigin(initialState, shareEntry),
     });
     if (stationLocationData.dataReady !== true) {
       this._setLocationStatus('unavailable');
     } else if (initialState.lastLocationStation) {
       this._setLocationStatus('cached');
     }
-    this._refreshHomeView();
+    this._refreshHomeView(initialState.visibleStationId, {
+      skipSync: this._isTimelineSinglePage,
+    });
+    this._enableShareMenu();
   },
 
   onShow() {
     if (!this._state) return;
+
+    const shareEntry = resolveShareEntry(this._getEnterOptions());
+    if (this._isTimelineSinglePage
+      && !shareEntry.isTimelineSinglePage
+      && shareEntry.scene === TIMELINE_FULL_APP_SCENE) {
+      this._isTimelineSinglePage = false;
+      this.setData({ isTimelineSinglePage: false });
+    }
+    this._enableShareMenu();
+    if (this._isTimelineSinglePage) {
+      this._refreshHomeView(SHARE_DEFAULT_RESOLVED_ORIGIN_ID, { skipSync: true });
+      return;
+    }
 
     const initialState = catalog.getInitialHomeState();
     this._state = {
@@ -267,6 +323,7 @@ Page({
       isManualAnchor: initialState.originMode === 'manual',
       soundEnabled: initialState.soundEnabled !== false,
       vibrationEnabled: initialState.vibrationEnabled !== false,
+      showDefaultOriginLabel: this._isDefaultShareOrigin(initialState, shareEntry),
     });
     this._systemOriginStationId = initialState.systemOriginStationId || this._systemOriginStationId;
     this._directionMode = initialState.directionMode || this._directionMode;
@@ -278,6 +335,14 @@ Page({
     }
     this._refreshHomeView(this._visibleStationId());
     this._startOperationalStatusClock();
+  },
+
+  onShareAppMessage() {
+    return getShareAppMessage();
+  },
+
+  onShareTimeline() {
+    return getShareTimeline();
   },
 
   onHide() {
@@ -298,6 +363,33 @@ Page({
     this._stopOperationalStatusClock();
     if (this._unsubscribeSync) this._unsubscribeSync();
     if (this._feedback) this._feedback.destroy();
+  },
+
+  _getEnterOptions() {
+    try {
+      if (typeof wx.getEnterOptionsSync === 'function') return wx.getEnterOptionsSync() || {};
+      if (typeof wx.getLaunchOptionsSync === 'function') return wx.getLaunchOptionsSync() || {};
+    } catch (error) {
+      // 分享入口信息不可用时按普通首页打开，不影响本地查询。
+    }
+    return {};
+  },
+
+  _enableShareMenu() {
+    if (this._isTimelineSinglePage || typeof wx.showShareMenu !== 'function') return;
+    wx.showShareMenu({
+      menus: ['shareAppMessage', 'shareTimeline'],
+    });
+  },
+
+  _isDefaultShareOrigin(initialState, shareEntry) {
+    return Boolean(
+      shareEntry
+      && shareEntry.isTimelineSinglePage
+      && !initialState.lastLocationStation
+      && initialState.originMode !== 'manual'
+      && initialState.originStationId === SHARE_DEFAULT_RESOLVED_ORIGIN_ID,
+    );
   },
 
   _getNavigationMetrics() {
@@ -615,13 +707,17 @@ Page({
       },
     };
     const state = states[status] || states.failed;
-    this.setData({
+    const patch = {
       locationStatus: status,
       locationLabel: state.label,
       locationActionLabel: state.action,
       showLocationAction: state.showAction,
       locationIssue: issue || '',
-    });
+    };
+    if (['success', 'nearest', 'selectedNearby'].includes(status)) {
+      patch.showDefaultOriginLabel = false;
+    }
+    this.setData(patch);
   },
 
   _cancelPendingLocation() {
@@ -822,8 +918,10 @@ Page({
         this._scheduleStationWheelLayout();
       }
     });
-    this._updateSyncStatus();
-    if (!(options && options.skipSync)) this._scheduleSyncForVisibleStation(0);
+    if (!this._isTimelineSinglePage) this._updateSyncStatus();
+    if (!this._isTimelineSinglePage && !(options && options.skipSync)) {
+      this._scheduleSyncForVisibleStation(0);
+    }
   },
 
   _scheduleStationWheelLayout() {
@@ -853,6 +951,7 @@ Page({
   _decorateStations(stations, currentIndex, lineColor) {
     const overrideMaps = Object.create(null);
     const getOverride = (restroom) => {
+      if (this._isTimelineSinglePage) return null;
       const lineId = restroom.lineId;
       if (!overrideMaps[lineId]) {
         overrideMaps[lineId] = getLineOverrides(lineId, {
@@ -978,6 +1077,7 @@ Page({
   },
 
   _startOperationalStatusClock() {
+    if (this._isTimelineSinglePage) return;
     this._stopOperationalStatusClock();
     this._operationalStatusTimer = setInterval(() => {
       if (!this._rawStations) return;
@@ -1098,6 +1198,7 @@ Page({
   },
 
   _saveCurrentPreferences(patch) {
+    if (this._isTimelineSinglePage) return;
     savePreferences(Object.assign({
       lineId: this._state.lineId,
       direction: this._state.direction,
@@ -1109,7 +1210,7 @@ Page({
   },
 
   _addRecentRecord(station, action) {
-    if (!station) return;
+    if (this._isTimelineSinglePage || !station) return;
 
     addRecentRecord({
       lineId: this._state.lineId,
@@ -1718,6 +1819,7 @@ Page({
     this._state.originStationId = originStationId;
     this.setData({
       isManualAnchor: true,
+      showDefaultOriginLabel: false,
       isManualSelectionGuide: false,
       manualStationOptions: [],
       showStationPicker: false,
@@ -1739,7 +1841,10 @@ Page({
     const visibleStationId = this._visibleStationId();
     this._cancelPendingLocation();
     this._state.originStationId = originStationId;
-    this.setData({ isManualAnchor: true });
+    this.setData({
+      isManualAnchor: true,
+      showDefaultOriginLabel: false,
+    });
     this._refreshHomeView(visibleStationId || originStationId);
     this._saveCurrentPreferences({ originMode: 'manual' });
     this._addRecentRecord(originStation, '设置起点');
@@ -1747,6 +1852,10 @@ Page({
   },
 
   onRestoreSmartLocation() {
+    if (this._isTimelineSinglePage) {
+      wx.showToast({ title: '进入小程序后可定位附近站点', icon: 'none' });
+      return;
+    }
     if ((this.data.locationStatus === 'lineRequired' && this.data.locationCandidates.length)
       || (this.data.locationStatus === 'stationRequired'
         && this.data.nearbyStationCandidates.length)
@@ -1772,6 +1881,10 @@ Page({
   },
 
   onLocationAction() {
+    if (this._isTimelineSinglePage) {
+      wx.showToast({ title: '进入小程序后可定位附近站点', icon: 'none' });
+      return;
+    }
     if (this.data.locationStatus === 'lineRequired' && this.data.locationCandidates.length) {
       this.setData({ showLocationCandidates: true });
       return;
@@ -1885,6 +1998,10 @@ Page({
   },
 
   onRequestLocation() {
+    if (this._isTimelineSinglePage) {
+      wx.showToast({ title: '进入小程序后可定位附近站点', icon: 'none' });
+      return;
+    }
     if (stationLocationData.dataReady !== true || !(stationLocationData.stations || []).length) {
       wx.showToast({ title: '站点定位数据准备中', icon: 'none' });
       return;
@@ -1992,6 +2109,7 @@ Page({
     });
     this.setData({
       isManualAnchor: false,
+      showDefaultOriginLabel: false,
       showNearbyStationPicker: false,
       showLocationCandidates: false,
       nearbyStationCandidates: [],

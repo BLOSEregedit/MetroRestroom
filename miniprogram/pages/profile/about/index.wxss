@@ -14,10 +14,11 @@
 .privacy-item:last-child { border-bottom: 0; }
 .privacy-item__title { color: #4c535a; font-size: 26rpx; font-weight: 600; }
 .privacy-item__copy { display: block; margin-top: 10rpx; color: #737c84; font-size: 24rpx; line-height: 1.7; }
-.source-card { margin-top: 24rpx; padding: 28rpx; }
+.source-card { display: flex; min-height: 112rpx; align-items: center; justify-content: space-between; margin-top: 24rpx; padding: 24rpx 28rpx; box-sizing: border-box; }
+.source-card--pressed { opacity: 0.58; }
+.source-card__body { min-width: 0; }
 .source-title { color: #4c535a; font-size: 27rpx; font-weight: 600; }
-.source-copy { display: block; margin-top: 16rpx; color: #7d858d; font-size: 23rpx; line-height: 1.65; }
-.source-link { display: flex; align-items: center; justify-content: space-between; margin-top: 18rpx; color: #007aff; font-size: 21rpx; word-break: break-all; }
-.source-link__action { flex: none; margin-left: 18rpx; color: #8b939b; }
+.source-summary { display: block; margin-top: 8rpx; color: #8b939b; font-size: 23rpx; line-height: 1.5; }
+.source-chevron { flex: none; margin-left: 20rpx; color: #a7adb3; font-size: 40rpx; font-weight: 300; line-height: 1; }
 .page-back-action { display: flex; min-height: 88rpx; align-items: center; justify-content: center; margin-top: 28rpx; color: #007aff; font-size: 28rpx; font-weight: 500; }
 .page-back-action--pressed { opacity: 0.55; }

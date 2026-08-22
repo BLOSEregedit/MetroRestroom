@@ -1,0 +1,16 @@
+.sources-page { min-height: 100vh; padding: 72rpx 40rpx 88rpx; box-sizing: border-box; color: #1f2429; }
+.sources-lead { padding: 0 8rpx; }
+.sources-kicker { color: #007aff; font-size: 23rpx; font-weight: 600; letter-spacing: 2rpx; }
+.sources-title { margin-top: 14rpx; font-size: 42rpx; font-weight: 600; line-height: 1.25; }
+.sources-copy { display: block; margin-top: 18rpx; color: #67717a; font-size: 26rpx; line-height: 1.72; }
+.section-label { margin: 52rpx 8rpx 16rpx; color: #8a929a; font-size: 23rpx; }
+.city-card { position: relative; display: flex; min-height: 132rpx; align-items: center; overflow: hidden; padding: 26rpx 28rpx 26rpx 34rpx; border-radius: 24rpx; background: #fff; box-sizing: border-box; }
+.city-card--pressed { opacity: 0.58; }
+.city-card__accent { position: absolute; top: 26rpx; bottom: 26rpx; left: 0; width: 7rpx; border-radius: 0 7rpx 7rpx 0; background: #e3002b; }
+.city-card__body { min-width: 0; flex: 1; }
+.city-card__name { color: #252b30; font-size: 31rpx; font-weight: 600; }
+.city-card__summary { display: block; margin-top: 10rpx; color: #858d94; font-size: 23rpx; line-height: 1.55; }
+.city-card__chevron { flex: none; margin-left: 22rpx; color: #a7adb3; font-size: 42rpx; font-weight: 300; line-height: 1; }
+.sources-footnote { display: block; margin: 24rpx 8rpx 0; color: #9aa1a7; font-size: 22rpx; line-height: 1.65; }
+.page-back-action { display: flex; min-height: 88rpx; align-items: center; justify-content: center; margin-top: 36rpx; color: #007aff; font-size: 28rpx; font-weight: 500; }
+.page-back-action--pressed { opacity: 0.55; }

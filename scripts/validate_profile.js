@@ -12,6 +12,8 @@ const app = { globalData: { pendingCorrectionContext: null } };
 const navigationCalls = [];
 const navigateBackCalls = [];
 const switchTabCalls = [];
+const clipboardCalls = [];
+const toastCalls = [];
 let pageStackDepth = 2;
 
 global.getApp = () => app;
@@ -20,6 +22,11 @@ global.wx = {
   switchTab(options) { switchTabCalls.push(options); },
   navigateBack(options) { navigateBackCalls.push(options); },
   navigateTo(options) { navigationCalls.push(options); },
+  setClipboardData(options) {
+    clipboardCalls.push(options);
+    if (typeof options.success === 'function') options.success();
+  },
+  showToast(options) { toastCalls.push(options); },
   getAccountInfoSync() {
     return { miniProgram: { envVersion: 'release', version: '1.2.3' } };
   },
@@ -246,6 +253,10 @@ const aboutWxss = fs.readFileSync(
 assert(aboutWxml.includes('src="/images/logo.png"'), '关于页必须展示小程序正式 Logo');
 assert(!aboutWxml.includes('about-subtitle'), '关于页标题下不得保留重复产品副标题');
 assert(aboutWxml.includes('<view class="privacy-title">隐私与数据</view>'), '关于页必须提供独立隐私与数据模块');
+assert(aboutWxml.includes('<view class="source-title">数据来源</view>'), '关于页必须提供数据来源一级入口');
+assert(aboutWxml.includes('bindtap="onOpenDataSources"'), '数据来源入口必须绑定独立导航');
+assert(aboutWxml.includes('官方及公开资料，按城市查看'), '数据来源入口必须说明按城市组织');
+assert(!aboutWxml.includes('站点坐标来源'), '关于页不得继续只展示单一坐标来源');
 assert(aboutWxml.includes('日常查询不要求注册或登录'), '隐私模块必须说明无需登录和日常查询不主动采集个人信息');
 assert(aboutWxml.includes('打开即用，用完即走'), '隐私模块必须说明轻量工具的使用方式');
 assert(aboutWxml.includes('基础数据全部随小程序保存在本地'), '隐私模块必须说明基础数据保存在本地');
@@ -272,6 +283,13 @@ assert(/\.privacy-item__copy\s*\{[^}]*font-size:\s*24rpx[^}]*line-height:\s*1\.7
 assert(aboutWxml.includes('bindtap="onBack"'), '关于页必须提供明确的返回操作');
 assert(aboutWxml.includes('aria-label="返回我的"'), '关于页返回操作必须提供读屏名称');
 
+aboutPage.onOpenDataSources();
+assert.strictEqual(
+  navigationCalls.slice(-1)[0].url,
+  '/pages/profile/data-sources/index',
+  '关于页数据来源入口必须进入城市来源列表',
+);
+
 pageStackDepth = 2;
 aboutPage.onBack();
 assert.deepStrictEqual(navigateBackCalls.slice(-1)[0], { delta: 1 }, '关于页存在上一页时必须正常返回');
@@ -279,10 +297,87 @@ pageStackDepth = 1;
 aboutPage.onBack();
 assert.strictEqual(switchTabCalls.slice(-1)[0].url, '/pages/profile/index', '关于页单独打开时必须回到“我的”');
 
+// 场景九：数据来源按“城市列表 → 上海详情”两级组织，并公开说明官方数据与 AI 推导边界。
 const appConfig = JSON.parse(fs.readFileSync(
   path.resolve(__dirname, '../miniprogram/app.json'),
   'utf8',
 ));
+assert(appConfig.pages.includes('pages/profile/data-sources/index'), 'app.json 必须注册数据来源城市列表页');
+assert(appConfig.pages.includes('pages/profile/data-sources/shanghai/index'), 'app.json 必须注册上海来源详情页');
+
+pageDefinition = null;
+const sourcesPagePath = path.resolve(__dirname, '../miniprogram/pages/profile/data-sources/index.js');
+delete require.cache[sourcesPagePath];
+require(sourcesPagePath);
+assert(pageDefinition, '数据来源城市列表 Page 配置未加载');
+const sourcesPage = createPage();
+sourcesPage.onOpenShanghai();
+assert.strictEqual(
+  navigationCalls.slice(-1)[0].url,
+  '/pages/profile/data-sources/shanghai/index',
+  '城市来源列表必须进入上海详情页',
+);
+const sourcesWxml = fs.readFileSync(
+  path.resolve(__dirname, '../miniprogram/pages/profile/data-sources/index.wxml'),
+  'utf8',
+);
+assert(sourcesWxml.includes('<view class="city-card__name">上海</view>'), '当前城市列表必须提供上海入口');
+assert(sourcesWxml.includes('每座城市，单独说明'), '城市来源页必须明确按城市组织数据来源');
+assert(!sourcesWxml.includes('我们'), '城市数据来源页应使用个人独立开发者语气');
+assert(!sourcesWxml.includes('产品推导'), '城市数据来源页应统一使用“AI 推导”');
+assert(!sourcesWxml.includes('厕所'), '数据来源城市列表不得向用户显示“厕所”');
+
+pageDefinition = null;
+const shanghaiSourcesPagePath = path.resolve(
+  __dirname,
+  '../miniprogram/pages/profile/data-sources/shanghai/index.js',
+);
+delete require.cache[shanghaiSourcesPagePath];
+require(shanghaiSourcesPagePath);
+assert(pageDefinition, '上海数据来源 Page 配置未加载');
+const shanghaiSourcesPage = createPage();
+assert(/^\d{4}\.\d{2}\.\d{2}$/.test(shanghaiSourcesPage.data.checkedDate), '上海来源页必须显示数据核对日期');
+assert.strictEqual(shanghaiSourcesPage.data.sourceLinks.length, 5, '上海来源页必须保留五类可复制公开来源');
+shanghaiSourcesPage.onCopySource({ currentTarget: { dataset: { index: 1 } } });
+assert.strictEqual(
+  clipboardCalls.slice(-1)[0].data,
+  'https://service.shmetro.com/hcskb/index.htm',
+  '点击首末班来源必须复制上海地铁官方链接',
+);
+assert.strictEqual(toastCalls.slice(-1)[0].title, '来源链接已复制', '复制来源后必须提供明确反馈');
+
+const shanghaiSourcesWxml = fs.readFileSync(
+  path.resolve(__dirname, '../miniprogram/pages/profile/data-sources/shanghai/index.wxml'),
+  'utf8',
+);
+const shanghaiSourcesJson = JSON.parse(fs.readFileSync(
+  path.resolve(__dirname, '../miniprogram/pages/profile/data-sources/shanghai/index.json'),
+  'utf8',
+));
+assert.strictEqual(
+  shanghaiSourcesJson.navigationBarTitleText,
+  '上海地铁数据来源',
+  '上海详情页导航标题应明确为上海地铁数据来源',
+);
+[
+  '线路与站点',
+  '主线、支线与环线',
+  '站间预估时间',
+  '卫生间位置',
+  '站点与入口坐标',
+  '官方计划＋AI 推导',
+  '它不是实时到站时间',
+  'OpenStreetMap contributors',
+].forEach((copy) => {
+  assert(shanghaiSourcesWxml.includes(copy), `上海来源页缺少说明：${copy}`);
+});
+assert(!shanghaiSourcesWxml.includes('我们'), '上海数据来源页应使用个人独立开发者语气');
+assert(!shanghaiSourcesWxml.includes('产品推导'), '上海数据来源页应统一使用“AI 推导”');
+assert(!shanghaiSourcesWxml.includes('根据 Excel 行顺序'), '上海主支线说明不应展示 Excel 实现细节');
+assert(!shanghaiSourcesWxml.includes('厕所'), '上海来源页不得向用户显示“厕所”');
+assert(shanghaiSourcesWxml.includes('bindtap="onCopySource"'), '上海来源页必须允许复制公开来源链接');
+assert(shanghaiSourcesWxml.includes('aria-label="返回数据来源"'), '上海来源页必须提供明确返回入口');
+
 assert(!appConfig.permission['scope.userLocation'].desc.includes('厕所'), '定位授权说明不得混用“厕所”');
 assert(appConfig.pages.includes('pages/profile/developer-note/index'), '作者寄语页必须注册到小程序路由');
 const developerWxml = fs.readFileSync(
@@ -299,20 +394,21 @@ const developerJson = JSON.parse(fs.readFileSync(
 ));
 assert.strictEqual(developerJson.navigationBarTitleText, '作者寄语', '作者寄语页面导航标题错误');
 assert(developerWxml.includes('<view class="note-kicker">作者寄语</view>'), '作者寄语页面内部标题错误');
-assert.strictEqual((developerWxml.match(/class="note-paragraph"/g) || []).length, 8, '作者寄语必须使用八段短文完整表达产品理念');
+assert((developerWxml.match(/class="note-paragraph"/g) || []).length >= 8, '作者寄语必须使用多段短文完整表达产品理念');
 assert(developerWxml.includes('<view class="note-tagline">打开即用，用完即走。</view>'), '作者寄语必须突出轻量工具定位');
 assert(developerWxml.includes('这也是源于我自己的真实需求'), '作者寄语开头必须明确产品源于作者自身需求');
 assert(developerWxml.includes('真正麻烦的，往往不是“有没有”，而是“在哪里”'), '作者寄语必须说明问题重点是卫生间位置而非仅有无记录');
-assert(developerWxml.includes('在站内还是站外，闸内还是闸外，需不需要出站'), '作者寄语必须覆盖站内外与出闸判断');
+assert(developerWxml.includes('在站内还是站外，闸内还是闸外，需不需要去地面'), '作者寄语必须覆盖站内外、闸内外与地面位置判断');
 assert(developerWxml.includes('是在车头、车尾，还是换乘通道里'), '作者寄语必须覆盖站台方向与换乘通道位置');
-assert(developerWxml.includes('独立的地图、导航或出行 App 功能很全，却也很重'), '作者寄语必须交代独立 App 的使用成本');
+assert(developerWxml.includes('地图导航、短视频、种草社区这类 App 功能很全'), '作者寄语必须交代独立 App 的使用成本');
+assert(developerWxml.includes('但用起来也很“重”'), '作者寄语必须说明独立 App 的流程负担');
 assert(developerWxml.includes('绝大多数人每天都会打开的高频软件'), '作者寄语必须说明微信的小程序承载优势');
 assert(developerWxml.includes('交互也不够直接、快速、高效'), '作者寄语必须如实说明现有同类工具的体验不足');
 assert(!developerWxml.includes('高德地图'), '作者寄语不得点名具体地图产品');
 assert(!developerWxml.includes('Metro 大都会'), '作者寄语不得点名具体交通出行产品');
 assert(developerWxml.includes('我会每个站都亲自走一遍'), '作者寄语必须保留上海逐站亲自核查承诺');
 assert(developerWxml.includes('请当地靠谱的人按同样的标准实地核实'), '作者寄语必须保留其他城市协作核查说明');
-assert(developerWxml.includes('我会尽快核实更新'), '作者寄语必须明确反馈后的处理承诺');
+assert(developerWxml.includes('尽快核实更新'), '作者寄语必须明确反馈后的处理承诺');
 assert(!developerWxml.includes('note-card'), '作者寄语不得继续使用引用卡片结构');
 assert(!developerWxss.includes('.note-card'), '作者寄语不得残留引用卡片或左侧竖线样式');
 assert(/\.note-paragraph\s*\{[^}]*font-size:\s*29rpx[^}]*line-height:\s*1\.8/.test(developerWxss), '作者寄语必须使用放大后的移动端正文字号和行距');

@@ -20,11 +20,13 @@
         <view class="origin-mode origin-mode--{{locationStatus}}"><text>{{locationLabel}}</text><text class="origin-mode__action">｜{{locationActionLabel}}</text></view>
       </view>
       <view wx:else class="origin-control {{isManualAnchor ? 'origin-control--actionable' : ''}}">
-        <view class="origin-name-control" role="button" aria-label="当前计算起点{{originStationName}}，{{!isManualAnchor && !showLocationAction ? locationLabel + '，' : ''}}{{locationStatus === 'nearest' ? '直线距离，到站路程未计入预计时间，' : ''}}点击选择站点" bindtap="onOpenStationPicker">
+        <view class="origin-name-control" role="button" aria-label="{{showDefaultOriginLabel ? '默认展示' : '当前计算起点'}}{{originStationName}}，{{!isManualAnchor && !showLocationAction ? locationLabel + '，' : ''}}{{locationStatus === 'nearest' ? '直线距离，到站路程未计入预计时间，' : ''}}点击选择站点" bindtap="onOpenStationPicker">
+          <text wx:if="{{showDefaultOriginLabel}}" class="origin-default-label">默认展示 · </text>
           <text class="origin-name">{{originStationName}}</text>
         </view>
-        <text class="origin-separator">·</text>
-        <view wx:if="{{isManualAnchor && locationStatus === 'locating'}}" class="origin-mode origin-mode--locating">
+        <text wx:if="{{!showDefaultOriginLabel}}" class="origin-separator">·</text>
+        <view wx:if="{{showDefaultOriginLabel}}" class="origin-mode origin-mode--default" aria-hidden="true"></view>
+        <view wx:elif="{{isManualAnchor && locationStatus === 'locating'}}" class="origin-mode origin-mode--locating">
           <text>自选起点</text><text class="origin-mode__action">｜定位中…</text>
         </view>
         <view wx:elif="{{isManualAnchor}}" class="origin-mode origin-mode--manual" role="button" aria-label="当前为自选起点，点击恢复定位" bindtap="onRestoreSmartLocation">
@@ -47,7 +49,12 @@
     </view>
   </view>
 
-  <view class="sync-bar sync-bar--{{syncTone}}">
+  <view wx:if="{{isTimelineSinglePage}}" class="timeline-entry-note" role="note">
+    <text class="timeline-entry-note__title">当前展示人民广场</text>
+    <text class="timeline-entry-note__copy">进入小程序后可定位附近站点</text>
+  </view>
+
+  <view wx:else class="sync-bar sync-bar--{{syncTone}}">
     <view class="sync-bar__status"><text class="sync-bar__dot"></text><text class="sync-bar__message">{{syncMessage}}</text></view>
     <button class="sync-bar__action" aria-label="{{syncActionLabel}}数据" disabled="{{syncPhase === 'checking'}}" bindtap="onRefreshSync"><view class="sync-action__icon {{syncPhase === 'checking' ? 'sync-action__icon--spinning' : ''}}"></view><text class="sync-action__label">{{syncActionLabel}}</text></button>
   </view>

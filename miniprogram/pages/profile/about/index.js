@@ -23,18 +23,12 @@ function returnToProfile() {
 Page({
   data: {
     version: '',
-    osmLicenseUrl: 'https://www.openstreetmap.org/copyright',
   },
   onLoad() {
     this.setData({ version: getReleaseVersion() });
   },
-  onCopyOsmLicense() {
-    wx.setClipboardData({
-      data: this.data.osmLicenseUrl,
-      success() {
-        wx.showToast({ title: '许可链接已复制', icon: 'none' });
-      },
-    });
+  onOpenDataSources() {
+    wx.navigateTo({ url: '/pages/profile/data-sources/index' });
   },
   onBack() {
     returnToProfile();

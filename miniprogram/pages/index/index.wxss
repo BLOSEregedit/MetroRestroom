@@ -13,8 +13,9 @@
 .control-chevron__mark { width: 9rpx; height: 9rpx; box-sizing: border-box; border-right: 2rpx solid currentColor; border-bottom: 2rpx solid currentColor; transform: translateY(-2rpx) rotate(45deg); }
 .origin-control { min-width: 0; flex: 1; overflow: hidden; }
 .origin-control--actionable { min-height: 88rpx; }
-.origin-name-control { min-width: 0; overflow: hidden; flex: 0 1 auto; }
-.origin-name { display: block; overflow: hidden; color: #1f2429; font-size: 34rpx; font-weight: 700; letter-spacing: .5rpx; text-overflow: ellipsis; white-space: nowrap; }
+.origin-name-control { display: flex; min-width: 0; align-items: baseline; overflow: hidden; flex: 0 1 auto; }
+.origin-default-label { flex: none; color: #77808a; font-size: 21rpx; font-weight: 500; white-space: nowrap; }
+.origin-name { display: block; min-width: 0; overflow: hidden; color: #1f2429; font-size: 34rpx; font-weight: 700; letter-spacing: .5rpx; text-overflow: ellipsis; white-space: nowrap; }
 .origin-separator { flex: none; margin: 0 8rpx; color: #b0b6bc; font-size: 24rpx; }
 .origin-mode { min-width: 0; flex: none; color: #77808a; font-size: 21rpx; white-space: nowrap; }
 .origin-mode--manual { color: #007aff; }
@@ -45,6 +46,9 @@
 .sync-action__icon::after { position: absolute; top: -5rpx; left: -4rpx; width: 0; height: 0; border-top: 4rpx solid transparent; border-bottom: 4rpx solid transparent; border-right: 6rpx solid currentColor; content: ""; transform: rotate(35deg); }
 .sync-action__icon--spinning { animation: sync-spin .8s linear infinite; }
 @keyframes sync-spin { to { transform: rotate(360deg); } }
+.timeline-entry-note { display: flex; min-height: 62rpx; align-items: center; justify-content: space-between; gap: 16rpx; margin: 7rpx 10rpx 0; padding: 0 14rpx; border-radius: 16rpx; background: #edf5ff; color: #245f94; }
+.timeline-entry-note__title { flex: none; font-size: 22rpx; font-weight: 700; }
+.timeline-entry-note__copy { min-width: 0; overflow: hidden; color: #5d7891; font-size: 20rpx; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .route-switch { display: flex; min-height: 44rpx; align-items: center; justify-content: space-between; gap: 20rpx; margin-top: 8rpx; padding: 8rpx 4rpx 0; border-top: 1rpx solid rgba(24,32,40,.07); font-size: 21rpx; }
 .route-switch__current,.route-switch__action { display: flex; min-width: 0; align-items: center; gap: 8rpx; white-space: nowrap; }
 .route-switch__current { overflow: hidden; color: #69727b; }

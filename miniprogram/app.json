@@ -4,6 +4,8 @@
     "pages/profile/index",
     "pages/correction/index",
     "pages/profile/about/index",
+    "pages/profile/data-sources/index",
+    "pages/profile/data-sources/shanghai/index",
     "pages/profile/developer-note/index"
   ],
   "window": {
