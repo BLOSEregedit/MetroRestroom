@@ -1370,7 +1370,7 @@ assert(/\.sync-bar__action\s*\{[^}]*background:\s*transparent/.test(homepageWxss
 assert(/\.sync-bar__action\s*\{[^}]*position:\s*absolute[^}]*right:\s*0[^}]*margin:\s*0[^}]*padding:\s*0/.test(homepageWxss), '更新图标与文字必须贴齐同步栏右边界');
 assert(homepageWxml.includes('class="sync-action__label"'), '更新文字必须保留可单独核对的右对齐边界');
 assert(/\.sync-bar\s*\{[^}]*margin:\s*6rpx 10rpx 0/.test(homepageWxss), '更新入口右边界必须与轮盘右侧提示对齐');
-assert(/\.wheel-heading\s*\{[^}]*margin:\s*10rpx 10rpx 4rpx/.test(homepageWxss), '轮盘两侧辅助提示必须使用一致的左右边界');
+assert(/\.wheel-heading\s*\{[^}]*margin:\s*8rpx 10rpx 12rpx/.test(homepageWxss), '轮盘两侧辅助提示必须保留上下留白和一致的左右边界');
 assert(homepageWxss.includes('@keyframes sync-spin'), '更新图标必须具有旋转关键帧');
 assert(!homepageWxss.includes('0 0 30rpx rgba(85,181,190'), '焦点卡片不得使用会被轮盘裁成矩形的外扩背光');
 assert(!/\.eta-label\s*\{[^}]*color:/.test(homepageWxss), 'ETA 不得继续使用固定红色');

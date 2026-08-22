@@ -95,8 +95,8 @@ assert.deepStrictEqual(
 );
 assert.deepStrictEqual(
   pngSize(timelineImagePath),
-  { width: 600, height: 600 },
-  '朋友圈分享图必须是 1:1',
+  { width: 256, height: 256 },
+  '朋友圈分享图必须是适配小缩略图的 1:1 尺寸',
 );
 assert.strictEqual(
   sha256(friendImagePath),

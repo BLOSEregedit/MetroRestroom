@@ -56,7 +56,7 @@
 .route-switch__eyebrow { flex: none; color: #9aa1a8; }
 .route-switch__action { flex: none; font-weight: 600; }
 .route-switch__chevron { font-size: 30rpx; font-weight: 300; line-height: 1; }
-.wheel-heading { display: flex; justify-content: space-between; margin: 10rpx 10rpx 4rpx; color: #59626c; font-size: 25rpx; }
+.wheel-heading { display: flex; justify-content: space-between; margin: 8rpx 10rpx 12rpx; color: #59626c; font-size: 25rpx; }
 .wheel-tip { color: #9ba2a9; font-size: 21rpx; }
 .station-wheel { position: relative; min-height: 0; flex: 1; overflow: hidden; }
 .station-wheel-scroll { width: 100%; height: 100%; min-height: 0; }

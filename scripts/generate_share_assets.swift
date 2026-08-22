@@ -112,8 +112,8 @@ func makeFriendImage() throws {
 
 func makeTimelineImage() throws {
   try renderPNG(
-    width: 600,
-    height: 600,
+    width: 256,
+    height: 256,
     designWidth: 1000,
     designHeight: 1000,
     to: outputDirectory.appendingPathComponent("share-timeline.png")
