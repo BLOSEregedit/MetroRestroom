@@ -13,29 +13,30 @@
       </view>
     </view>
     <view class="control-row control-row--second {{locationStatus === 'nearest' || locationStatus === 'selectedNearby' || locationStatus === 'stationRequired' || locationStatus === 'lineRequired' ? 'control-row--location-wide' : ''}}">
-      <view wx:if="{{locationStatus === 'lineRequired' || locationStatus === 'stationRequired'}}" class="origin-control origin-control--actionable" role="button" aria-label="{{locationStatus === 'stationRequired' ? '当前计算起点' : '待确认站点'}}{{locationStatus === 'stationRequired' ? originStationName : locationPendingStationName}}，{{locationLabel}}，{{locationActionLabel}}" bindtap="onLocationAction">
-        <view class="origin-name-control">
-          <text class="origin-name">{{locationStatus === 'stationRequired' ? originStationName : locationPendingStationName}}</text>
+      <view wx:if="{{locationStatus === 'lineRequired' || locationStatus === 'stationRequired'}}" class="origin-control origin-control--actionable">
+        <view class="origin-primary-row">
+          <view class="origin-name-control">
+            <text class="origin-name">{{locationStatus === 'stationRequired' ? originStationName : locationPendingStationName}}</text>
+          </view>
+          <view wx:if="{{!isTimelineSinglePage}}" class="origin-smart-action" role="button" aria-label="{{smartLocationActionLabel === '智能定位' ? '当前为智能定位，点击重新定位' : '点击开启智能定位'}}" catchtap="onRestoreSmartLocation">{{smartLocationActionLabel}}</view>
         </view>
-        <view class="origin-mode origin-mode--{{locationStatus}}"><text>{{locationLabel}}</text><text class="origin-mode__action">｜{{locationActionLabel}}</text></view>
+        <view class="origin-mode origin-mode--{{locationStatus}}" role="button" aria-label="{{locationStatus === 'stationRequired' ? '当前计算起点' : '待确认站点'}}{{locationStatus === 'stationRequired' ? originStationName : locationPendingStationName}}，{{locationLabel}}，{{locationActionLabel}}" bindtap="onLocationAction"><text>{{locationLabel}}</text><text class="origin-mode__action">｜{{locationActionLabel}}</text></view>
       </view>
-      <view wx:else class="origin-control {{isManualAnchor ? 'origin-control--actionable' : ''}}">
-        <view class="origin-name-control" role="button" aria-label="{{showDefaultOriginLabel ? '默认展示' : '当前计算起点'}}{{originStationName}}，{{!isManualAnchor && !showLocationAction ? locationLabel + '，' : ''}}{{locationStatus === 'nearest' ? '直线距离，到站路程未计入预计时间，' : ''}}点击选择站点" bindtap="onOpenStationPicker">
-          <text wx:if="{{showDefaultOriginLabel}}" class="origin-default-label">默认展示 · </text>
-          <text class="origin-name">{{originStationName}}</text>
+      <view wx:else class="origin-control">
+        <view class="origin-primary-row">
+          <view class="origin-name-control" role="button" aria-label="{{showDefaultOriginLabel ? '默认展示' : '当前计算起点'}}{{originStationName}}，{{!isManualAnchor && !showLocationAction ? locationLabel + '，' : ''}}{{locationStatus === 'nearest' ? '直线距离，到站路程未计入预计时间，' : ''}}点击选择站点" bindtap="onOpenStationPicker">
+            <text wx:if="{{showDefaultOriginLabel}}" class="origin-default-label">默认展示 · </text>
+            <text class="origin-name">{{originStationName}}</text>
+          </view>
+          <view wx:if="{{!isTimelineSinglePage}}" class="origin-smart-action" role="button" aria-label="{{smartLocationActionLabel === '智能定位' ? '当前为智能定位，点击重新定位' : '点击开启智能定位'}}" catchtap="onRestoreSmartLocation">{{smartLocationActionLabel}}</view>
         </view>
-        <text wx:if="{{!showDefaultOriginLabel}}" class="origin-separator">·</text>
-        <view wx:if="{{showDefaultOriginLabel}}" class="origin-mode origin-mode--default" aria-hidden="true"></view>
-        <view wx:elif="{{isManualAnchor && locationStatus === 'locating'}}" class="origin-mode origin-mode--locating">
+        <view wx:if="{{isManualAnchor && locationStatus === 'locating'}}" class="origin-mode origin-mode--locating">
           <text>自选起点</text><text class="origin-mode__action">｜定位中…</text>
         </view>
-        <view wx:elif="{{isManualAnchor}}" class="origin-mode origin-mode--manual" role="button" aria-label="当前为自选起点，点击恢复定位" bindtap="onRestoreSmartLocation">
-          <text>自选起点</text><text class="origin-mode__action">｜恢复定位</text>
+        <view wx:elif="{{isManualAnchor}}" class="origin-mode origin-mode--manual" aria-hidden="true">
+          <text>自选起点</text>
         </view>
-        <view wx:elif="{{showLocationAction}}" class="origin-mode origin-mode--{{locationStatus}}" role="button" aria-label="{{locationLabel}}，{{locationActionLabel}}" bindtap="onLocationAction">
-          <text>{{locationLabel}}</text><text class="origin-mode__action">｜{{locationActionLabel}}</text>
-        </view>
-        <view wx:else class="origin-mode origin-mode--{{locationStatus}}" aria-hidden="true">
+        <view wx:elif="{{!showDefaultOriginLabel && locationStatus !== 'success'}}" class="origin-mode origin-mode--{{locationStatus}}" aria-hidden="true">
           <text>{{locationLabel}}</text>
         </view>
       </view>

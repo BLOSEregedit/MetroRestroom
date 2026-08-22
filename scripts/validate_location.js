@@ -1,4 +1,6 @@
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 const {
   DEFAULT_AUTO_DISTANCE_METERS,
   DEFAULT_MAX_DISTANCE_METERS,
@@ -10,6 +12,7 @@ const {
 const {
   requestAuthorizedCurrentPosition,
   requestCurrentPosition,
+  startForegroundLocation,
   openLocationSettings,
 } = require('../miniprogram/utils/location-service');
 const restroomData = require('../miniprogram/data/generated/restrooms');
@@ -30,6 +33,18 @@ function wxMock(handlers) {
 }
 
 async function validate() {
+  const appConfig = JSON.parse(fs.readFileSync(
+    path.resolve(__dirname, '../miniprogram/app.json'),
+    'utf8',
+  ));
+  assert.deepStrictEqual(
+    appConfig.requiredPrivateInfos,
+    ['getLocation', 'startLocationUpdate', 'onLocationChange'],
+    '必须声明单次定位和前台持续定位所需接口',
+  );
+  assert(!appConfig.requiredPrivateInfos.includes('startLocationUpdateBackground'),
+    '本小程序不得声明后台持续定位');
+
   const activeRecords = restroomData.lines.reduce(
     (records, line) => records.concat(line.records || []),
     [],
@@ -261,6 +276,93 @@ async function validate() {
   });
   assert.strictEqual((await requestCurrentPosition(allowedApi)).ok, true);
 
+  let locationListener = null;
+  let locationErrorListener = null;
+  let startLocationOptions = null;
+  let receivedPosition = null;
+  let receivedLocationError = null;
+  let stopLocationCalls = 0;
+  let offLocationCalls = 0;
+  let offLocationErrorCalls = 0;
+  const foregroundApi = {
+    getSetting: ({ success }) => success({
+      authSetting: { 'scope.userLocation': true },
+    }),
+    onLocationChange(listener) { locationListener = listener; },
+    offLocationChange(listener) {
+      assert.strictEqual(listener, locationListener);
+      offLocationCalls += 1;
+    },
+    onLocationChangeError(listener) { locationErrorListener = listener; },
+    offLocationChangeError(listener) {
+      assert.strictEqual(listener, locationErrorListener);
+      offLocationErrorCalls += 1;
+    },
+    startLocationUpdate(options) {
+      startLocationOptions = options;
+      options.success({});
+    },
+    stopLocationUpdate({ success }) {
+      stopLocationCalls += 1;
+      success({});
+    },
+  };
+  const foregroundLocation = await startForegroundLocation(
+    foregroundApi,
+    (position) => { receivedPosition = position; },
+    (error) => { receivedLocationError = error; },
+  );
+  assert.strictEqual(foregroundLocation.ok, true);
+  assert.strictEqual(startLocationOptions.type, 'wgs84', '持续定位必须与本地 WGS84 站点坐标一致');
+  locationListener({
+    latitude: 31.23,
+    longitude: 121.47,
+    horizontalAccuracy: 18,
+  });
+  assert.deepStrictEqual(receivedPosition, {
+    latitude: 31.23,
+    longitude: 121.47,
+    accuracy: 18,
+  });
+  locationErrorListener({ errCode: 2 });
+  assert.deepStrictEqual(receivedLocationError, { errCode: 2 });
+  assert.strictEqual(await foregroundLocation.stop(), true);
+  assert.strictEqual(await foregroundLocation.stop(), true, '重复停止持续定位必须安全幂等');
+  assert.strictEqual(stopLocationCalls, 1, '退出前台必须停止持续定位');
+  assert.strictEqual(offLocationCalls, 1, '退出前台必须移除位置变化监听');
+  assert.strictEqual(offLocationErrorCalls, 1, '退出前台必须移除持续定位错误监听');
+
+  let unavailableSettingCalls = 0;
+  const unavailableForeground = await startForegroundLocation({
+    getSetting() { unavailableSettingCalls += 1; },
+  });
+  assert.strictEqual(unavailableForeground.status, 'unavailable');
+  assert.strictEqual(unavailableSettingCalls, 0, '接口不存在时必须直接降级，不得额外触发授权');
+
+  let unauthorizedStartCalls = 0;
+  const unauthorizedForeground = await startForegroundLocation({
+    getSetting: ({ success }) => success({ authSetting: {} }),
+    onLocationChange() {},
+    startLocationUpdate() { unauthorizedStartCalls += 1; },
+  });
+  assert.strictEqual(unauthorizedForeground.status, 'notAuthorized');
+  assert.strictEqual(unauthorizedStartCalls, 0, '未授权时不得启动持续定位');
+
+  let failedOffCalls = 0;
+  const failedForeground = await startForegroundLocation({
+    getSetting: ({ success }) => success({
+      authSetting: { 'scope.userLocation': true },
+    }),
+    onLocationChange() {},
+    offLocationChange() { failedOffCalls += 1; },
+    startLocationUpdate: ({ fail }) => fail({
+      errMsg: 'startLocationUpdate:fail api not authorized',
+    }),
+  });
+  assert.strictEqual(failedForeground.ok, false);
+  assert.strictEqual(failedForeground.status, 'failed');
+  assert.strictEqual(failedOffCalls, 1, '持续定位启动失败必须清理已注册监听');
+
   let silentAuthorizeCalls = 0;
   let silentLocationCalls = 0;
   const silentlyAllowedApi = wxMock({
@@ -315,7 +417,7 @@ async function validate() {
     openSetting: ({ success }) => success({ authSetting: { 'scope.userLocation': true } }),
   });
   assert.strictEqual(await openLocationSettings(settingApi), true);
-  console.log('定位逻辑验收通过：411 个物理站、561 条路线边、距离分层、5 公里附近站排序、入口选线、静默授权复用、拒绝、超时和设置恢复。');
+  console.log('定位逻辑验收通过：411 个物理站、561 条路线边、距离分层、前台持续定位启停与降级、入口选线、静默授权复用、拒绝、超时和设置恢复。');
 }
 
 validate().catch((error) => {

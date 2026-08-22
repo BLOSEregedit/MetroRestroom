@@ -168,6 +168,10 @@ const wxml = fs.readFileSync(
   '默认展示 · ',
 ].forEach((copy) => assert(wxml.includes(copy), `首页缺少分享入口文案：${copy}`));
 [
+  'class="origin-smart-action"',
+  'catchtap="onRestoreSmartLocation">{{smartLocationActionLabel}}</view>',
+].forEach((markup) => assert(wxml.includes(markup), '分享默认站页面必须直接显示智能定位入口'));
+[
   'showShareLocationInvite',
   '查找你附近的地铁站',
   '先看看',
@@ -182,6 +186,7 @@ function createHomePage(enterOptions, locationHandlers) {
   global.wx.getWindowInfo = () => ({ statusBarHeight: 20 });
   global.wx.showShareMenu = () => {};
   global.wx.getSetting = locationHandlers.getSetting;
+  global.wx.authorize = locationHandlers.authorize || (() => {});
   global.wx.getLocation = locationHandlers.getLocation || (() => {});
   const page = Object.assign({}, pageDefinition, {
     data: Object.assign({}, pageDefinition.data),
@@ -194,6 +199,9 @@ function createHomePage(enterOptions, locationHandlers) {
 }
 
 async function validateShareLifecycle() {
+  const currentStation = stationLocationData.stations.find(
+    (station) => station.lineStationIds.length === 1,
+  );
   storage.resetPreferences();
   storage.saveLastLocationStation({
     cityId: 'shanghai',
@@ -241,10 +249,24 @@ async function validateShareLifecycle() {
 
   storage.resetPreferences();
   storage.clearLastLocationStation();
+  let authorizeCalls = 0;
+  let promptedLocationCalls = 0;
   const freshPage = createHomePage(
     { scene: 1007, query: { cityId: 'shanghai' } },
     {
       getSetting: ({ success }) => success({ authSetting: {} }),
+      authorize: ({ success }) => {
+        authorizeCalls += 1;
+        success();
+      },
+      getLocation: ({ success }) => {
+        promptedLocationCalls += 1;
+        success({
+          latitude: currentStation.latitude,
+          longitude: currentStation.longitude,
+          accuracy: 20,
+        });
+      },
     },
   );
   freshPage.onLoad({ cityId: 'shanghai' });
@@ -253,6 +275,16 @@ async function validateShareLifecycle() {
   assert.strictEqual(freshPage._state.originStationId, 'l2-s019');
   assert.strictEqual(freshPage.data.locationStatus, 'notRequested');
   assert.strictEqual(freshPage.data.showDefaultOriginLabel, true);
+  assert.strictEqual(freshPage.data.showLocationAction, true);
+  assert.strictEqual(freshPage.data.smartLocationActionLabel, '开启智能定位');
+  freshPage.onRestoreSmartLocation();
+  await nextTask();
+  assert.strictEqual(authorizeCalls, 1, '点击智能定位应直接申请定位权限');
+  assert.strictEqual(promptedLocationCalls, 1, '授权后应立即获取当前位置');
+  assert.strictEqual(freshPage._state.originStationId, currentStation.lineStationIds[0]);
+  assert.strictEqual(freshPage.data.locationStatus, 'success');
+  assert.strictEqual(freshPage.data.smartLocationActionLabel, '智能定位');
+  assert.strictEqual(freshPage.data.showDefaultOriginLabel, false);
   freshPage.onUnload();
 
   storage.savePreferences({
@@ -286,9 +318,6 @@ async function validateShareLifecycle() {
   assert.strictEqual(fallbackPage.data.locationStatus, 'cached');
   fallbackPage.onUnload();
 
-  const currentStation = stationLocationData.stations.find(
-    (station) => station.lineStationIds.length === 1,
-  );
   const locatedPage = createHomePage(
     { scene: 1007, query: { cityId: 'shanghai' } },
     {
@@ -316,7 +345,7 @@ async function validateShareLifecycle() {
 }
 
 validateShareLifecycle().then(() => {
-  console.log('分享功能验证通过：仅携带城市、老用户静默定位入口、单页模式兼容和分享图尺寸正确');
+  console.log('分享功能验证通过：仅携带城市、静默定位回退、默认站开启智能定位直达、单页模式兼容和分享图尺寸正确');
 }).catch((error) => {
   console.error(error);
   process.exitCode = 1;

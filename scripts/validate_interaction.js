@@ -498,6 +498,110 @@ deniedLocationCase.page.onRestoreSmartLocation();
 assert.strictEqual(deniedLocationActionCalls, 1, '拒绝定位后恢复入口必须转入重新授权流程');
 assert.strictEqual(deniedLocationCase.page.data.isManualAnchor, true, '重新授权前应保留自选起点');
 
+const foregroundResumeCase = createPage('2', 'forward', '人民广场', peopleSquare.id);
+foregroundResumeCase.page.data.isManualAnchor = false;
+foregroundResumeCase.page._isPageVisible = true;
+foregroundResumeCase.page._isTimelineSinglePage = false;
+let foregroundStartCalls = 0;
+let foregroundFallbackCalls = 0;
+foregroundResumeCase.page._ensureForegroundLocationUpdates = () => {
+  foregroundStartCalls += 1;
+  return Promise.resolve({ ok: false, status: 'unavailable' });
+};
+foregroundResumeCase.page._requestLocation = (positionRequest, options) => {
+  foregroundFallbackCalls += 1;
+  foregroundResumeCase.page._fallbackLocationOptions = options;
+  return Promise.resolve(null);
+};
+foregroundResumeCase.page._resumeForegroundSmartLocation();
+assert.strictEqual(foregroundStartCalls, 1, '进入前台必须尝试启动持续定位');
+assert.strictEqual(foregroundFallbackCalls, 1, '持续定位不可用时仍必须执行已授权的单次定位');
+assert.deepStrictEqual(
+  foregroundResumeCase.page._fallbackLocationOptions,
+  { silent: true, fallbackToLast: true },
+  '前台自动单次定位失败时必须保留上次位置且不打扰用户',
+);
+foregroundResumeCase.page.data.isManualAnchor = true;
+foregroundResumeCase.page._resumeForegroundSmartLocation();
+assert.strictEqual(foregroundStartCalls, 1, '自选起点期间不得重新启动持续定位');
+assert.strictEqual(foregroundFallbackCalls, 1, '自选起点期间不得被自动单次定位覆盖');
+
+const foregroundMoveCase = createPage('2', 'forward', '人民广场', peopleSquare.id);
+const peopleSquarePhysical = stationLocationData.stations.find(
+  (station) => (station.lineStationIds || []).includes(peopleSquare.id),
+);
+const eastNanjingRoadPhysical = stationLocationData.stations.find(
+  (station) => station.canonicalName === '南京东路',
+);
+assert(peopleSquarePhysical && eastNanjingRoadPhysical, '持续定位测试站点必须存在');
+foregroundMoveCase.page.data.isManualAnchor = false;
+foregroundMoveCase.page.data.locationStatus = 'success';
+foregroundMoveCase.page._isPageVisible = true;
+foregroundMoveCase.page._isTimelineSinglePage = false;
+foregroundMoveCase.page._lastLocationStation = {
+  physicalStationId: peopleSquarePhysical.physicalStationId,
+};
+foregroundMoveCase.page._foregroundLocationLastHandledAt = 0;
+foregroundMoveCase.page._foregroundLocationPendingStationId = '';
+foregroundMoveCase.page._foregroundLocationPendingCount = 0;
+let foregroundMoveRequests = 0;
+foregroundMoveCase.page._requestLocation = (positionRequest, options) => {
+  foregroundMoveRequests += 1;
+  foregroundMoveCase.page._foregroundMoveOptions = options;
+};
+const eastNanjingRoadPosition = {
+  latitude: eastNanjingRoadPhysical.latitude,
+  longitude: eastNanjingRoadPhysical.longitude,
+  accuracy: 20,
+};
+foregroundMoveCase.page._onForegroundLocationChange(eastNanjingRoadPosition);
+assert.strictEqual(foregroundMoveRequests, 0, '移动到新站的首个样本不得立即切站');
+foregroundMoveCase.page._foregroundLocationLastHandledAt = 0;
+foregroundMoveCase.page._onForegroundLocationChange(eastNanjingRoadPosition);
+assert.strictEqual(foregroundMoveRequests, 1, '连续两个样本命中新站后必须更新智能定位站点');
+assert.deepStrictEqual(
+  foregroundMoveCase.page._foregroundMoveOptions,
+  { silent: true, fallbackToLast: true, keepStatus: true },
+  '持续定位更新必须静默执行，并在异常时保留上次位置',
+);
+
+const foregroundErrorCase = createPage('2', 'forward', '人民广场', peopleSquare.id);
+foregroundErrorCase.page.data.isManualAnchor = false;
+foregroundErrorCase.page._isPageVisible = true;
+foregroundErrorCase.page._isTimelineSinglePage = false;
+foregroundErrorCase.page._foregroundLocationSessionId = 1;
+let foregroundErrorStopCalls = 0;
+let foregroundErrorFallbackCalls = 0;
+foregroundErrorCase.page._foregroundLocationController = {
+  stop() { foregroundErrorStopCalls += 1; },
+};
+foregroundErrorCase.page._requestLocation = (positionRequest, options) => {
+  foregroundErrorFallbackCalls += 1;
+  foregroundErrorCase.page._foregroundErrorOptions = options;
+};
+foregroundErrorCase.page._onForegroundLocationError();
+assert.strictEqual(foregroundErrorStopCalls, 1, '持续定位运行中报错必须先停止并清理监听');
+assert.strictEqual(foregroundErrorFallbackCalls, 1, '持续定位运行中报错必须降级为单次定位');
+assert.deepStrictEqual(
+  foregroundErrorCase.page._foregroundErrorOptions,
+  { silent: true, fallbackToLast: true, keepStatus: true },
+  '运行中降级不得覆盖上次有效定位状态',
+);
+
+const foregroundStopCase = createPage('2', 'forward', '人民广场', peopleSquare.id);
+let foregroundStopCalls = 0;
+foregroundStopCase.page._isPageVisible = true;
+foregroundStopCase.page._locationRequestToken = 4;
+foregroundStopCase.page._foregroundLocationSessionId = 2;
+foregroundStopCase.page._foregroundLocationController = {
+  stop() { foregroundStopCalls += 1; },
+};
+foregroundStopCase.page._stopOperationalStatusClock = () => {};
+foregroundStopCase.page.onHide();
+assert.strictEqual(foregroundStopCase.page._isPageVisible, false);
+assert.strictEqual(foregroundStopCase.page._locationRequestToken, 5, '进入后台必须使未完成的定位请求失效');
+assert.strictEqual(foregroundStopCalls, 1, '进入后台必须停止持续定位');
+
 const transferPhysical = stationLocationData.stations.find(
   (station) => (station.lineStationIds || []).includes(peopleSquare.id),
 );
@@ -819,11 +923,17 @@ assert.strictEqual(applyLocationCase.page._directionMode, 'manual');
 assert.strictEqual(applyLocationCase.page._refreshedStationId, peopleSquare.id);
 assert.strictEqual(applyLocationCase.page.data.locationStatus, 'nearest');
 assert.strictEqual(applyLocationCase.page.data.locationLabel, '最近站 · 约 2.6 公里');
+assert.strictEqual(applyLocationCase.page.data.smartLocationActionLabel, '智能定位');
 const appliedLastLocation = storage.getLastLocationStation();
 assert.strictEqual(appliedLastLocation.cityId, 'shanghai');
 assert.strictEqual(appliedLastLocation.lineStationId, peopleSquare.id);
 assert.strictEqual(appliedLastLocation.physicalStationId, transferPhysical.physicalStationId);
 assert(appliedLastLocation.locatedAt > 0);
+
+const nearStationPresentationCase = createPage('2', 'forward', '人民广场', peopleSquare.id);
+nearStationPresentationCase.page._setLocationStatus('success');
+assert.strictEqual(nearStationPresentationCase.page.data.smartLocationActionLabel, '智能定位');
+assert.strictEqual(nearStationPresentationCase.page.data.locationLabel, '智能定位');
 
 const selectedNearbyCase = createPage('2', 'reverse', '人民广场', peopleSquare.id);
 selectedNearbyCase.page._refreshHomeView = () => {};
@@ -836,6 +946,7 @@ const selectedNearbyCandidate = selectedNearbyCase.page._locationOptionsForMatch
 selectedNearbyCase.page._applyLocationCandidate(selectedNearbyCandidate);
 assert.strictEqual(selectedNearbyCase.page.data.locationStatus, 'selectedNearby');
 assert.strictEqual(selectedNearbyCase.page.data.locationLabel, '已选站 · 约 3.8 公里');
+assert.strictEqual(selectedNearbyCase.page.data.smartLocationActionLabel, '智能定位');
 
 const invalidAnchorOrigin = manualAnchorCase.page._state.originStationId;
 manualAnchorCase.page.onSetManualAnchor({ currentTarget: { dataset: { stationId: 'missing' } } });
@@ -1197,12 +1308,15 @@ assert(homepageWxml.includes('class="city-control"'), '城市必须使用独立�
 assert(homepageWxml.includes('bindtap="onOpenCityPicker"'), '城市胶囊必须可打开城市面板');
 assert(homepageWxml.includes('更多城市陆续开放'), '第一版城市面板必须说明后续城市计划');
 assert(homepageWxml.includes('class="origin-name-control"'), '起点站名必须是独立点击区');
-assert(/class="origin-control origin-control--actionable" role="button"[^>]*bindtap="onLocationAction"/.test(homepageWxml), '待确认站点与操作必须合并为单一大点击区');
+assert(/class="origin-mode origin-mode--\{\{locationStatus\}\}" role="button"[^>]*bindtap="onLocationAction"/.test(homepageWxml), '待确认站点必须保留独立确认入口，不得与智能定位入口混用');
 assert(homepageWxml.includes('bindtap="onOpenStationPicker"'), '普通起点站名必须可打开站点选择器');
-assert(homepageWxml.includes("!isManualAnchor && !showLocationAction ? locationLabel + '，' : ''"), '非操作型定位状态必须合并进站名按钮的可访问名称');
+assert(homepageWxml.includes('class="origin-smart-action"'), '顶部必须常驻独立的智能定位入口');
+assert(homepageWxml.includes('catchtap="onRestoreSmartLocation">{{smartLocationActionLabel}}</view>'), '智能定位入口必须可重复点击且不触发站点选择');
+assert(homepageWxml.includes("当前为智能定位，点击重新定位"), '已定位状态必须说明可重新定位');
+assert(homepageWxml.includes("!showDefaultOriginLabel && locationStatus !== 'success'"), '用户在地铁站或附近时不得额外显示最近站距离');
 assert(homepageWxml.includes("locationStatus === 'nearest' ? '直线距离，到站路程未计入预计时间，' : ''"), '最近站的可访问名称必须说明直线距离不计入到站路程');
 assert(homepageWxml.includes('自选起点'), '手动起点必须使用已确认的用户文案');
-assert(homepageWxml.includes('恢复定位'), '自选起点必须提供恢复定位入口');
+assert(homepageWxml.includes('onRestoreSmartLocation'), '自选起点必须能通过常驻入口恢复定位');
 assert(!homepageWxml.includes('当前计算起点</text>'), '顶部不得继续常驻旧计算起点标签');
 assert(!homepageWxml.includes('>更换</text>'), '顶部不得继续常驻旧更换按钮');
 assert(!homepageJs.includes("locationLabel: '尚未开启定位'"), '首次进入不得继续使用旧定位状态文案');

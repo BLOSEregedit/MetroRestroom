@@ -260,7 +260,9 @@ assert(!aboutWxml.includes('站点坐标来源'), '关于页不得继续只展�
 assert(aboutWxml.includes('日常查询不要求注册或登录'), '隐私模块必须说明无需登录和日常查询不主动采集个人信息');
 assert(aboutWxml.includes('打开即用，用完即走'), '隐私模块必须说明轻量工具的使用方式');
 assert(aboutWxml.includes('基础数据全部随小程序保存在本地'), '隐私模块必须说明基础数据保存在本地');
-assert(aboutWxml.includes('只用于在本机匹配附近站点'), '隐私模块必须说明定位用途和处理位置');
+assert(aboutWxml.includes('用于在本机匹配并更新附近站点'), '隐私模块必须说明定位用途和处理位置');
+assert(aboutWxml.includes('只在小程序保持前台使用期间接收位置变化'), '隐私模块必须说明持续定位仅在前台运行');
+assert(aboutWxml.includes('切换到后台后立即停止'), '隐私模块必须说明进入后台后停止定位');
 assert(aboutWxml.includes('也可以手动选择线路和站点'), '隐私模块必须说明拒绝定位后的手动方案');
 assert(aboutWxml.includes('只有你主动提交站点纠错时'), '隐私模块必须说明纠错是唯一主动上传入口');
 assert(aboutWxml.includes('自愿填写的联系方式'), '隐私模块必须说明联系方式仅在用户自愿填写时上传');

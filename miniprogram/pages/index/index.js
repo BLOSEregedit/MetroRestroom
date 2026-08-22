@@ -8,6 +8,7 @@ const { rankNearbyStations, resolveNearestEntranceLine } = require('../../utils/
 const {
   requestAuthorizedCurrentPosition,
   requestCurrentPosition,
+  startForegroundLocation,
   openLocationSettings,
 } = require('../../utils/location-service');
 const {
@@ -48,6 +49,8 @@ const workletEasing = workletApi && workletApi.Easing;
 const SYNC_CITY_ID = 'shanghai';
 const SYNC_BUNDLE_SCHEMA = 1;
 const OPERATIONAL_STATUS_REFRESH_MS = 60 * 1000;
+const FOREGROUND_LOCATION_MIN_INTERVAL_MS = 3000;
+const FOREGROUND_LOCATION_CONFIRMATION_SAMPLES = 2;
 const TRANSFER_SWIPE_PX = 48;
 const HORIZONTAL_GESTURE_RATIO = 1.2;
 const WHEEL_VISIBLE_SLOTS = 5;
@@ -251,6 +254,7 @@ Page({
     locationLabel: '未定位',
     locationActionLabel: '开启定位',
     showLocationAction: true,
+    smartLocationActionLabel: '开启智能定位',
     showLocationCandidates: false,
     locationCandidates: [],
     showNearbyStationPicker: false,
@@ -287,10 +291,16 @@ Page({
     this._systemOriginStationId = initialState.systemOriginStationId || initialState.originStationId;
     this._directionMode = initialState.directionMode || 'default';
     this._locationRequestToken = 0;
+    this._foregroundLocationSessionId = 0;
+    this._foregroundLocationController = null;
+    this._foregroundLocationStartPromise = null;
+    this._foregroundLocationLastHandledAt = 0;
+    this._foregroundLocationPendingStationId = '';
+    this._foregroundLocationPendingCount = 0;
+    this._isPageVisible = false;
     this._hasConfirmedLocation = Boolean(initialState.lastLocationStation);
     this._lastLocationStation = initialState.lastLocationStation || null;
     this._hasShown = false;
-    this._shareAutoLocationStarted = false;
     this._explicitLineId = '';
     this._lineViewStateById = Object.create(null);
     this._pendingLocationMatch = null;
@@ -339,6 +349,7 @@ Page({
 
   onShow() {
     if (!this._state) return;
+    this._isPageVisible = true;
 
     const latestShareEntry = resolveShareEntry(
       this._getEnterOptions(),
@@ -357,7 +368,7 @@ Page({
         return;
       }
       this._startOperationalStatusClock();
-      this._startShareAutoLocation();
+      this._resumeForegroundSmartLocation();
       return;
     }
 
@@ -367,7 +378,6 @@ Page({
     if (enteredTimelineFullApp) {
       this._isTimelineSinglePage = false;
       this.setData({ isTimelineSinglePage: false });
-      this._shareAutoLocationStarted = false;
     }
     this._enableShareMenu();
     if (this._isTimelineSinglePage) {
@@ -405,7 +415,7 @@ Page({
     }
     this._refreshHomeView(initialState.visibleStationId);
     this._startOperationalStatusClock();
-    if (enteredTimelineFullApp) this._startShareAutoLocation();
+    this._resumeForegroundSmartLocation();
   },
 
   onShareAppMessage() {
@@ -417,6 +427,9 @@ Page({
   },
 
   onHide() {
+    this._isPageVisible = false;
+    this._locationRequestToken += 1;
+    this._stopForegroundLocationUpdates();
     this._stopOperationalStatusClock();
     if (this._feedback) this._feedback.reset();
   },
@@ -426,7 +439,9 @@ Page({
   },
 
   onUnload() {
+    this._isPageVisible = false;
     this._locationRequestToken += 1;
+    this._stopForegroundLocationUpdates();
     if (this._syncTimer) clearTimeout(this._syncTimer);
     if (this._stationLayoutTimer) clearTimeout(this._stationLayoutTimer);
     if (this._wheelSnapTimer) clearTimeout(this._wheelSnapTimer);
@@ -453,16 +468,127 @@ Page({
     });
   },
 
-  _startShareAutoLocation() {
-    if (this._shareAutoLocationStarted
-      || this._isTimelineSinglePage
-      || !this._shareEntry
-      || !this._shareEntry.isShareEntry) return;
-    this._shareAutoLocationStarted = true;
+  _resumeForegroundSmartLocation() {
+    if (!this._isPageVisible || this._isTimelineSinglePage || this.data.isManualAnchor) {
+      return Promise.resolve([]);
+    }
+    return Promise.all([
+      this._ensureForegroundLocationUpdates(),
+      this._requestLocation(requestAuthorizedCurrentPosition, {
+        silent: true,
+        fallbackToLast: true,
+      }),
+    ]);
+  },
+
+  _ensureForegroundLocationUpdates() {
+    if (!this._isPageVisible || this._isTimelineSinglePage || this.data.isManualAnchor) {
+      return Promise.resolve({ ok: false, status: 'inactive' });
+    }
+    if (this._foregroundLocationController) {
+      return Promise.resolve({ ok: true, reused: true });
+    }
+    if (this._foregroundLocationStartPromise) return this._foregroundLocationStartPromise;
+
+    const sessionId = this._foregroundLocationSessionId + 1;
+    this._foregroundLocationSessionId = sessionId;
+    const startPromise = startForegroundLocation(
+      wx,
+      (position) => {
+        if (sessionId === this._foregroundLocationSessionId) {
+          this._onForegroundLocationChange(position);
+        }
+      },
+      () => {
+        if (sessionId === this._foregroundLocationSessionId) {
+          this._onForegroundLocationError();
+        }
+      },
+    ).then((result) => {
+      if (this._foregroundLocationStartPromise === startPromise) {
+        this._foregroundLocationStartPromise = null;
+      }
+      if (!result.ok) return result;
+      if (sessionId !== this._foregroundLocationSessionId
+        || !this._isPageVisible
+        || this.data.isManualAnchor) {
+        result.stop();
+        return { ok: false, status: 'inactive' };
+      }
+      this._foregroundLocationController = result;
+      return result;
+    });
+    this._foregroundLocationStartPromise = startPromise;
+    return startPromise;
+  },
+
+  _stopForegroundLocationUpdates() {
+    this._foregroundLocationSessionId += 1;
+    this._foregroundLocationStartPromise = null;
+    this._foregroundLocationLastHandledAt = 0;
+    this._foregroundLocationPendingStationId = '';
+    this._foregroundLocationPendingCount = 0;
+    const controller = this._foregroundLocationController;
+    this._foregroundLocationController = null;
+    if (controller && typeof controller.stop === 'function') controller.stop();
+  },
+
+  _onForegroundLocationError() {
+    if (!this._isPageVisible || this._isTimelineSinglePage || this.data.isManualAnchor) return;
+    this._stopForegroundLocationUpdates();
     this._requestLocation(requestAuthorizedCurrentPosition, {
       silent: true,
       fallbackToLast: true,
+      keepStatus: true,
     });
+  },
+
+  _onForegroundLocationChange(position) {
+    if (!this._isPageVisible || this._isTimelineSinglePage || this.data.isManualAnchor) return;
+    if (this.data.showLinePicker
+      || this.data.showStationPicker
+      || this.data.showLocationCandidates
+      || this.data.showNearbyStationPicker
+      || this.data.showRestroomDrawer) return;
+
+    const now = Date.now();
+    if (this._foregroundLocationLastHandledAt
+      && now - this._foregroundLocationLastHandledAt < FOREGROUND_LOCATION_MIN_INTERVAL_MS) return;
+    this._foregroundLocationLastHandledAt = now;
+
+    const match = rankNearbyStations(position, stationLocationData.stations);
+    if (match.status !== 'success' || !match.candidates.length) return;
+    const physicalStationId = match.candidates[0].physicalStationId;
+    const currentPhysicalStationId = this._lastLocationStation
+      && this._lastLocationStation.physicalStationId;
+    const currentLocationIsFresh = ['success', 'nearest', 'selectedNearby']
+      .includes(this.data.locationStatus);
+    if (physicalStationId === currentPhysicalStationId && currentLocationIsFresh) {
+      this._foregroundLocationPendingStationId = '';
+      this._foregroundLocationPendingCount = 0;
+      return;
+    }
+
+    if (physicalStationId !== currentPhysicalStationId) {
+      if (physicalStationId === this._foregroundLocationPendingStationId) {
+        this._foregroundLocationPendingCount += 1;
+      } else {
+        this._foregroundLocationPendingStationId = physicalStationId;
+        this._foregroundLocationPendingCount = 1;
+      }
+      if (this._foregroundLocationPendingCount < FOREGROUND_LOCATION_CONFIRMATION_SAMPLES) return;
+    }
+
+    this._foregroundLocationPendingStationId = '';
+    this._foregroundLocationPendingCount = 0;
+    this._requestLocation(
+      () => Promise.resolve({ ok: true, position }),
+      {
+        silent: true,
+        fallbackToLast: true,
+        keepStatus: true,
+      },
+    );
   },
 
   _isDefaultShareOrigin(initialState, shareEntry) {
@@ -791,11 +917,22 @@ Page({
       },
     };
     const state = states[status] || states.failed;
+    const smartLocationActive = [
+      'cached',
+      'locating',
+      'success',
+      'nearest',
+      'stationRequired',
+      'selectedNearby',
+      'lineRequired',
+      'unmatched',
+    ].includes(status);
     const patch = {
       locationStatus: status,
       locationLabel: state.label,
       locationActionLabel: state.action,
       showLocationAction: state.showAction,
+      smartLocationActionLabel: smartLocationActive ? '智能定位' : '开启智能定位',
       locationIssue: issue || '',
     };
     if (['success', 'nearest', 'selectedNearby'].includes(status)) {
@@ -1900,6 +2037,7 @@ Page({
         }
       }
     }
+    this._stopForegroundLocationUpdates();
     this._cancelPendingLocation();
     this._state.originStationId = originStationId;
     this.setData({
@@ -1924,6 +2062,7 @@ Page({
     if (!originStation) return;
 
     const visibleStationId = this._visibleStationId();
+    this._stopForegroundLocationUpdates();
     this._cancelPendingLocation();
     this._state.originStationId = originStationId;
     this.setData({
@@ -2085,7 +2224,9 @@ Page({
     }
 
     if (pending.silent) {
-      this._setLocationStatus(this._hasConfirmedLocation ? 'cached' : 'notRequested');
+      if (!pending.keepStatus) {
+        this._setLocationStatus(this._hasConfirmedLocation ? 'cached' : 'notRequested');
+      }
       return;
     }
 
@@ -2099,7 +2240,7 @@ Page({
   },
 
   onRequestLocation() {
-    return this._requestLocation(requestCurrentPosition);
+    return this._requestLocation(requestCurrentPosition, { startForeground: true });
   },
 
   _requestLocation(positionRequest, options) {
@@ -2108,19 +2249,21 @@ Page({
       if (!requestOptions.silent) {
         wx.showToast({ title: '进入小程序后可定位附近站点', icon: 'none' });
       }
-      return;
+      return Promise.resolve(null);
     }
     if (stationLocationData.dataReady !== true || !(stationLocationData.stations || []).length) {
       if (!requestOptions.silent) {
         wx.showToast({ title: '站点定位数据准备中', icon: 'none' });
       }
-      return;
+      return Promise.resolve(null);
     }
 
     const requestToken = this._locationRequestToken + 1;
     this._locationRequestToken = requestToken;
     this._pendingLocationMatch = null;
     this._pendingLocationPosition = null;
+    this._foregroundLocationPendingStationId = '';
+    this._foregroundLocationPendingCount = 0;
     this.setData({
       showNearbyStationPicker: false,
       showLocationCandidates: false,
@@ -2129,11 +2272,12 @@ Page({
       locationPendingStationName: '',
       locationPendingDistanceLabel: '',
     });
-    this._setLocationStatus('locating');
-    positionRequest(wx).then((result) => {
+    if (!requestOptions.keepStatus) this._setLocationStatus('locating');
+    return positionRequest(wx).then((result) => {
       if (requestToken !== this._locationRequestToken) return;
 
       if (!result.ok) {
+        if (requestOptions.keepStatus) return;
         if (requestOptions.fallbackToLast) {
           this._setLocationStatus(this._hasConfirmedLocation ? 'cached' : 'notRequested');
           return;
@@ -2142,8 +2286,11 @@ Page({
         return;
       }
 
+      if (requestOptions.startForeground) this._ensureForegroundLocationUpdates();
+
       const match = rankNearbyStations(result.position, stationLocationData.stations);
       if (match.status === 'unmatched') {
+        if (requestOptions.keepStatus) return;
         if (requestOptions.fallbackToLast) {
           this._setLocationStatus(this._hasConfirmedLocation ? 'cached' : 'notRequested');
           return;
@@ -2153,11 +2300,13 @@ Page({
         return;
       }
       if (match.status !== 'success' && match.status !== 'selectionRequired') {
+        if (requestOptions.keepStatus) return;
         this._setLocationStatus('failed');
         return;
       }
 
       if (match.status === 'selectionRequired') {
+        if (requestOptions.keepStatus) return;
         if (requestOptions.fallbackToLast) {
           this._setLocationStatus(this._hasConfirmedLocation ? 'cached' : 'notRequested');
           return;
@@ -2197,9 +2346,11 @@ Page({
         proximity: match.proximity,
         lowAccuracy: match.lowAccuracy,
         silent: requestOptions.silent === true,
+        keepStatus: requestOptions.keepStatus === true,
       });
       const options = this._locationOptionsForMatch(pending);
       if (!options.length) {
+        if (requestOptions.keepStatus) return;
         this._setLocationStatus('failed', 'missingStationContext');
         return;
       }
@@ -2207,6 +2358,7 @@ Page({
       this._resolveLocationLineCandidate(pending);
     }).catch(() => {
       if (requestToken !== this._locationRequestToken) return;
+      if (requestOptions.keepStatus) return;
       this._setLocationStatus(
         requestOptions.fallbackToLast && this._hasConfirmedLocation ? 'cached' : 'failed',
       );
@@ -2308,6 +2460,7 @@ Page({
   },
 
   onChooseManualLocation() {
+    this._stopForegroundLocationUpdates();
     this._cancelPendingLocation();
     this.setData({
       isManualSelectionGuide: true,

@@ -22,6 +22,17 @@ function locationIssue(error) {
   return 'systemError';
 }
 
+function normalizePosition(result) {
+  const latitude = Number(result && result.latitude);
+  const longitude = Number(result && result.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  return {
+    latitude,
+    longitude,
+    accuracy: Number(result.accuracy || result.horizontalAccuracy) || 0,
+  };
+}
+
 function ensurePrivacy(api) {
   if (!api || typeof api.getPrivacySetting !== 'function') return Promise.resolve();
   return callWx(api, 'getPrivacySetting').then((setting) => {
@@ -51,14 +62,11 @@ function requestCurrentPosition(api) {
       isHighAccuracy: true,
       highAccuracyExpireTime: 4000,
     }))
-    .then((result) => ({
-      ok: true,
-      position: {
-        latitude: Number(result.latitude),
-        longitude: Number(result.longitude),
-        accuracy: Number(result.accuracy) || 0,
-      },
-    }))
+    .then((result) => {
+      const position = normalizePosition(result);
+      if (!position) throw { errMsg: 'getLocation:fail invalid position' };
+      return { ok: true, position };
+    })
     .catch((error) => {
       const issue = error.permissionDenied ? 'permissionDenied' : locationIssue(error);
       return {
@@ -83,14 +91,11 @@ function requestAuthorizedCurrentPosition(api) {
         highAccuracyExpireTime: 4000,
       });
     })
-    .then((result) => ({
-      ok: true,
-      position: {
-        latitude: Number(result.latitude),
-        longitude: Number(result.longitude),
-        accuracy: Number(result.accuracy) || 0,
-      },
-    }))
+    .then((result) => {
+      const position = normalizePosition(result);
+      if (!position) throw { errMsg: 'getLocation:fail invalid position' };
+      return { ok: true, position };
+    })
     .catch((error) => {
       if (error.notAuthorized) {
         return {
@@ -116,9 +121,90 @@ function openLocationSettings(api) {
     .catch(() => false);
 }
 
+function startForegroundLocation(api, onPosition, onError) {
+  if (!api
+    || typeof api.startLocationUpdate !== 'function'
+    || typeof api.onLocationChange !== 'function') {
+    return Promise.resolve({ ok: false, status: 'unavailable', issue: 'apiUnavailable' });
+  }
+
+  return callWx(api, 'getSetting')
+    .then((setting) => {
+      const authorization = setting.authSetting && setting.authSetting['scope.userLocation'];
+      if (authorization !== true) {
+        return Promise.reject({
+          errMsg: 'startLocationUpdate:fail not authorized',
+          notAuthorized: true,
+        });
+      }
+
+      const locationListener = (result) => {
+        const position = normalizePosition(result);
+        if (position && typeof onPosition === 'function') onPosition(position);
+      };
+      const errorListener = (error) => {
+        if (typeof onError === 'function') onError(error || {});
+      };
+      const detachListeners = () => {
+        try {
+          if (typeof api.offLocationChange === 'function') api.offLocationChange(locationListener);
+        } catch (error) {
+          // 监听清理失败不应阻塞单次定位降级。
+        }
+        try {
+          if (typeof api.offLocationChangeError === 'function') {
+            api.offLocationChangeError(errorListener);
+          }
+        } catch (error) {
+          // 监听清理失败不应阻塞单次定位降级。
+        }
+      };
+      try {
+        api.onLocationChange(locationListener);
+        if (typeof api.onLocationChangeError === 'function') {
+          api.onLocationChangeError(errorListener);
+        }
+      } catch (error) {
+        detachListeners();
+        return Promise.reject(error);
+      }
+
+      return callWx(api, 'startLocationUpdate', { type: 'wgs84' })
+        .then(() => {
+          let stopped = false;
+          return {
+            ok: true,
+            stop() {
+              if (stopped) return Promise.resolve(true);
+              stopped = true;
+              detachListeners();
+              if (typeof api.stopLocationUpdate !== 'function') return Promise.resolve(false);
+              return callWx(api, 'stopLocationUpdate').then(() => true).catch(() => false);
+            },
+          };
+        })
+        .catch((error) => {
+          detachListeners();
+          return {
+            ok: false,
+            status: 'failed',
+            issue: locationIssue(error),
+            message: errorMessage(error),
+          };
+        });
+    })
+    .catch((error) => ({
+      ok: false,
+      status: error.notAuthorized ? 'notAuthorized' : 'failed',
+      issue: error.notAuthorized ? 'notAuthorized' : locationIssue(error),
+      message: errorMessage(error),
+    }));
+}
+
 module.exports = {
   requestCurrentPosition,
   requestAuthorizedCurrentPosition,
+  startForegroundLocation,
   openLocationSettings,
   locationIssue,
 };
