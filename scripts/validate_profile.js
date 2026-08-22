@@ -5,6 +5,12 @@ const fs = require('fs');
 const path = require('path');
 const catalog = require('../miniprogram/data/catalog');
 const { getCorrectionOptions } = require('../miniprogram/data/correction-options');
+const {
+  ENVIRONMENT_VERSIONS,
+  RELEASE_NOTES,
+  VERSION_SERIES,
+  buildVersionSeries,
+} = require('../miniprogram/data/release-notes');
 const storage = require('../miniprogram/utils/storage');
 
 let pageDefinition = null;
@@ -100,6 +106,7 @@ storage.addRecentRecord({
 let page = createPage();
 page.onShow();
 assert.strictEqual(page.data.recentRecords.length, 2, '同线路同站重复访问不得重复展示');
+assert.strictEqual(page.data.versionTitle, '当前版本：1.2.3', '正式版个人页必须直接显示当前版本号');
 assert.strictEqual(page.data.recentRecords[0].stationName, '镇坪路', '最新一次访问应置顶');
 assert.strictEqual(page.data.recentRecords[0].action, '设置起点', '置顶记录应携带最新操作');
 assert.strictEqual(page.data.recentRecords[1].action, '查看卫生间', '旧版最近记录不得继续显示“厕所”');
@@ -206,6 +213,9 @@ const profileWxss = fs.readFileSync(
   'utf8',
 );
 assert(profileWxml.includes('<view class="setting-title">数据同步</view>'), '个人页必须展示数据同步状态');
+assert(profileWxml.includes('{{versionTitle}}'), '个人页必须直接展示当前正式版本');
+assert(!profileWxml.includes('查看更新记录'), '版本入口不得保留“查看更新记录”副文案');
+assert(profileWxml.includes('bindtap="openChangelog"'), '版本入口必须绑定更新记录页导航');
 assert(profileWxml.includes('<view class="setting-title">关于 Metro 洗手间</view>'), '个人页必须保留原关于入口');
 assert(profileWxml.includes('<view class="setting-description">数据来源与版本信息</view>'), '原关于入口必须继续说明数据来源与版本职责');
 assert(profileWxml.includes('<view class="setting-title">作者寄语</view>'), '个人页必须新增独立作者寄语入口');
@@ -215,13 +225,36 @@ assert(
   /\.sync-value__message\s*\{[^}]*white-space:\s*nowrap;/.test(profileWxss),
   '个人页同步状态必须保持单行',
 );
+
+global.wx.getAccountInfoSync = () => ({
+  miniProgram: { envVersion: 'trial', version: '' },
+});
+const trialProfilePage = createPage();
+trialProfilePage.onShow();
+assert.strictEqual(trialProfilePage.data.versionTitle, '当前版本：1.2.4', '体验版必须显示当前维护版本');
+
+global.wx.getAccountInfoSync = () => ({
+  miniProgram: { envVersion: 'develop', version: '' },
+});
+const developProfilePage = createPage();
+developProfilePage.onShow();
+assert.strictEqual(developProfilePage.data.versionTitle, '当前版本：1.2.5', '开发版必须显示当前维护版本');
+
+global.wx.getAccountInfoSync = () => ({
+  miniProgram: { envVersion: 'release', version: '1.2.3' },
+});
 const profileNavigationPage = createPage();
+profileNavigationPage.openChangelog();
 profileNavigationPage.openAbout();
 profileNavigationPage.openDeveloperNote();
 assert.deepStrictEqual(
-  navigationCalls.slice(-2).map((item) => item.url),
-  ['/pages/profile/about/index', '/pages/profile/developer-note/index'],
-  '关于与作者寄语必须进入两个独立页面',
+  navigationCalls.slice(-3).map((item) => item.url),
+  [
+    '/pages/profile/changelog/index',
+    '/pages/profile/about/index',
+    '/pages/profile/developer-note/index',
+  ],
+  '版本更新、关于与作者寄语必须进入各自独立页面',
 );
 
 // 场景八：关于页只在正式版显示真实版本号，不显示开发版占位或数据同步状态。
@@ -299,11 +332,132 @@ pageStackDepth = 1;
 aboutPage.onBack();
 assert.strictEqual(switchTabCalls.slice(-1)[0].url, '/pages/profile/index', '关于页单独打开时必须回到“我的”');
 
-// 场景九：数据来源按“城市列表 → 上海详情”两级组织，并公开说明官方数据与 AI 推导边界。
+// 场景九：主表每个 X.X 功能系列只显示最新版本，点击后展开同系列的完整三列历史。
 const appConfig = JSON.parse(fs.readFileSync(
   path.resolve(__dirname, '../miniprogram/app.json'),
   'utf8',
 ));
+assert(appConfig.pages.includes('pages/profile/changelog/index'), 'app.json 必须注册更新记录页');
+
+global.wx.getAccountInfoSync = () => ({
+  miniProgram: { envVersion: 'release', version: '1.2.3' },
+});
+pageDefinition = null;
+const changelogPagePath = path.resolve(__dirname, '../miniprogram/pages/profile/changelog/index.js');
+delete require.cache[changelogPagePath];
+require(changelogPagePath);
+assert(pageDefinition, '更新记录 Page 配置未加载');
+const changelogPage = createPage();
+assert.deepStrictEqual(ENVIRONMENT_VERSIONS, {
+  release: '1.2.3', trial: '1.2.4', develop: '1.2.5',
+}, '三个环境的当前版本基线必须与后台一致');
+assert.deepStrictEqual(
+  RELEASE_NOTES.map((record) => record.version),
+  ['1.2.5', '1.2.4', '1.2.3', '1.2.2', '1.2.1', '1.2.0', '1.1.1', '1.1.0', '1.0.0'],
+  '更新记录必须包含已确认的九个里程碑，并从新到旧排列',
+);
+RELEASE_NOTES.forEach((record, index) => {
+  assert(/^\d{4}-\d{2}-\d{2}$/.test(record.date), `第 ${index + 1} 条更新日期格式错误`);
+  assert(/^\d+\.\d+\.\d+$/.test(record.version), `第 ${index + 1} 条更新版本格式错误`);
+  assert(!record.version.startsWith('V'), `第 ${index + 1} 条更新版本不得保留 V 前缀`);
+  assert(record.summary && !record.summary.includes('\n'), `第 ${index + 1} 条主要更新必须保持单行`);
+});
+assert.strictEqual(RELEASE_NOTES.find((record) => record.version === '1.0.0').summary, '上海首发，支持地铁卫生间查询');
+assert.strictEqual(RELEASE_NOTES.find((record) => record.version === '1.1.0').summary, '新增轮盘式站点浏览');
+assert.strictEqual(RELEASE_NOTES.find((record) => record.version === '1.1.1').summary, '支持左右滑动切换换乘线路');
+assert.strictEqual(RELEASE_NOTES.find((record) => record.version === '1.2.0').summary, '支持智能定位与手动选站');
+assert.strictEqual(RELEASE_NOTES.find((record) => record.version === '1.2.1').summary, '升级站点数据与范围判定');
+assert.strictEqual(RELEASE_NOTES.find((record) => record.version === '1.2.2').summary, '新增行程预估与数据来源说明');
+assert.strictEqual(RELEASE_NOTES.find((record) => record.version === '1.2.3').summary, '新增分享功能和系统基础能力');
+assert.strictEqual(RELEASE_NOTES.find((record) => record.version === '1.2.4').summary, '升级前台实时定位');
+assert.strictEqual(RELEASE_NOTES.find((record) => record.version === '1.2.5').summary, '优化智能定位体验与版本记录');
+assert.strictEqual(VERSION_SERIES.length, 3, '当前主表应按 1.2、1.1、1.0 三个功能版本分组');
+assert.deepStrictEqual(VERSION_SERIES.map((group) => group.series), ['1.2', '1.1', '1.0']);
+assert.deepStrictEqual(
+  VERSION_SERIES.map((group) => group.latest.version),
+  ['1.2.5', '1.1.1', '1.0.0'],
+  '主表必须显示每个 X.X 功能版本下最新的完整 X.X.X 版本号',
+);
+assert.deepStrictEqual(
+  VERSION_SERIES[0].history.map((record) => record.version),
+  ['1.2.4', '1.2.3', '1.2.2', '1.2.1', '1.2.0'],
+  '展开后必须只显示同一 X.X 功能版本下的历史版本',
+);
+assert.deepStrictEqual(
+  VERSION_SERIES[1].history.map((record) => record.version),
+  ['1.1.0'],
+  '1.1.1 主表行必须下拉显示同系列的 1.1.0',
+);
+assert.strictEqual(VERSION_SERIES[2].history.length, 0, '没有旧版本的 1.0.0 不应显示空下拉记录');
+const futureSeries = buildVersionSeries([
+  { version: '2.1.1', date: '2026-09-02', summary: '优化' },
+  { version: '2.1.0', date: '2026-09-01', summary: '新功能上线' },
+  { version: '2.0.0', date: '2026-08-30', summary: '第二代上线' },
+].concat(RELEASE_NOTES));
+assert.deepStrictEqual(
+  futureSeries.map((group) => group.latest.version),
+  ['2.1.1', '2.0.0', '1.2.5', '1.1.1', '1.0.0'],
+  '新增功能版本后主表必须按每个 X.X 分组显示最新的 X.X.X',
+);
+
+assert.strictEqual(changelogPage.data.visibleSeries.length, 3, '当前主表必须显示 1.2、1.1、1.0 三个功能版本的最新记录');
+assert.strictEqual(changelogPage.data.hasMoreSeries, false, '一屏可容纳全部功能版本时不得显示查看更多入口');
+
+changelogPage.onToggleSeries({ currentTarget: { dataset: { series: '1.2', historyCount: 5 } } });
+assert.strictEqual(changelogPage.data.expandedSeries, '1.2', '点击 1.2.5 主表行必须展开 1.2.x 历史');
+changelogPage.onToggleSeries({ currentTarget: { dataset: { series: '1.1', historyCount: 1 } } });
+assert.strictEqual(changelogPage.data.expandedSeries, '1.1', '点击 1.1.1 主表行必须切换展开 1.1.x 历史');
+changelogPage.onToggleSeries({ currentTarget: { dataset: { series: '1.0', historyCount: 0 } } });
+assert.strictEqual(changelogPage.data.expandedSeries, '1.1', '没有旧版本的 1.0.0 不得产生空下拉');
+changelogPage.onToggleSeries({ currentTarget: { dataset: { series: '1.1', historyCount: 1 } } });
+assert.strictEqual(changelogPage.data.expandedSeries, '', '再次点击同一功能版本必须收起历史');
+
+changelogPage.setData({
+  hasMoreSeries: true,
+  visibleSeries: [],
+});
+changelogPage.onShowMore();
+assert.strictEqual(changelogPage.data.visibleSeries.length, VERSION_SERIES.length, '点击查看更多后必须展示全部功能版本');
+assert.strictEqual(changelogPage.data.hasMoreSeries, false, '展开后必须隐藏查看更多入口');
+
+const changelogWxml = fs.readFileSync(
+  path.resolve(__dirname, '../miniprogram/pages/profile/changelog/index.wxml'),
+  'utf8',
+);
+const changelogWxss = fs.readFileSync(
+  path.resolve(__dirname, '../miniprogram/pages/profile/changelog/index.wxss'),
+  'utf8',
+);
+assert(changelogWxml.includes('class="changelog-row changelog-row--header"'), '更新记录页必须提供表头');
+assert(changelogWxml.includes('{{item.latest.date}}'), '主表必须显示功能系列最新日期');
+assert(changelogWxml.includes('{{item.latest.version}}'), '主表必须显示功能系列最新版本号');
+assert(changelogWxml.includes('{{item.latest.summary}}'), '主表必须显示功能系列最新更新');
+assert(changelogWxml.includes('bindtap="onToggleSeries"'), '点击主表行必须绑定功能版本展开与收起行为');
+assert(changelogWxml.includes('expandedSeries === item.series'), '历史记录必须只在对应 X.X 功能版本行下展开');
+assert(changelogWxml.includes('wx:for="{{item.history}}"'), '下拉区域必须遍历同一大版本的历史记录');
+assert(changelogWxml.includes('{{record.date}}'), '下拉历史必须显示具体日期');
+assert(changelogWxml.includes('{{record.version}}'), '下拉历史必须显示具体版本');
+assert(changelogWxml.includes('{{record.summary}}'), '下拉历史必须显示具体更新内容');
+assert(changelogWxml.includes('class="changelog-row changelog-row--history"'), '下拉历史必须复用完整三列表格行，不得缩进成项目符号');
+assert(!changelogWxml.includes('changelog-detail__dot'), '下拉历史不得继续显示缩进项目符号');
+assert(changelogWxml.includes('bindtap="onShowMore"'), '更多记录必须通过点击查看更多展开');
+assert(changelogWxml.includes('点击查看更多'), '更新记录页必须提供查看更多文案');
+assert(!changelogWxml.includes('changelog-lead'), '更新记录页不得保留大块顶部介绍区');
+assert(/\.changelog-summary__copy\s*\{[^}]*white-space:\s*nowrap;/.test(changelogWxss), '主要更新必须保持单行');
+assert(changelogWxss.includes('.changelog-history'), '更新记录页必须提供完整历史表格下拉区域');
+assert(!changelogWxss.includes('padding: 14rpx 20rpx 16rpx 292rpx'), '下拉历史不得向更新内容列缩进');
+assert(/\.changelog-page\s*\{[^}]*padding:\s*24rpx 32rpx 40rpx/.test(changelogWxss), '更新记录页上下间距必须紧凑');
+assert(/\.changelog-row\s*\{[^}]*min-height:\s*76rpx/.test(changelogWxss), '更新记录表格行高必须紧凑');
+assert(/\.page-back-action\s*\{[^}]*margin-top:\s*auto/.test(changelogWxss), '返回我的必须位于页面底部');
+
+pageStackDepth = 2;
+changelogPage.onBack();
+assert.deepStrictEqual(navigateBackCalls.slice(-1)[0], { delta: 1 }, '更新记录存在上一页时必须正常返回');
+pageStackDepth = 1;
+changelogPage.onBack();
+assert.strictEqual(switchTabCalls.slice(-1)[0].url, '/pages/profile/index', '更新记录单独打开时必须回到“我的”');
+
+// 场景十：数据来源按“城市列表 → 上海详情”两级组织，并公开说明官方数据与 AI 推导边界。
 assert(appConfig.pages.includes('pages/profile/data-sources/index'), 'app.json 必须注册数据来源城市列表页');
 assert(appConfig.pages.includes('pages/profile/data-sources/shanghai/index'), 'app.json 必须注册上海来源详情页');
 
@@ -430,4 +584,4 @@ pageStackDepth = 1;
 developerPage.onBack();
 assert.strictEqual(switchTabCalls.slice(-1)[0].url, '/pages/profile/index', '作者寄语单独打开时必须回到“我的”');
 
-console.log('个人中心验收通过：最近记录、数据同步归位与正式版版本展示符合要求。');
+console.log('个人中心验收通过：x.x.x 环境版本、每个 X.X 功能系列最新一行、完整三列历史下拉与返回入口符合要求。');

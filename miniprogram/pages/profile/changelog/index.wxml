@@ -1,0 +1,39 @@
+<view class="changelog-page">
+  <view class="changelog-list">
+    <view class="changelog-row changelog-row--header">
+      <text class="changelog-date">日期</text>
+      <text class="changelog-version">版本</text>
+      <text class="changelog-summary">主要更新</text>
+    </view>
+    <block wx:for="{{visibleSeries}}" wx:key="series">
+      <view
+        class="changelog-row changelog-row--record"
+        data-series="{{item.series}}"
+        data-history-count="{{item.history.length}}"
+        bindtap="onToggleSeries"
+        aria-role="{{item.history.length ? 'button' : 'text'}}"
+        aria-expanded="{{expandedSeries === item.series}}"
+        aria-label="{{item.latest.version}} {{item.latest.summary}}"
+      >
+        <text class="changelog-date">{{item.latest.date}}</text>
+        <text class="changelog-version">{{item.latest.version}}</text>
+        <view class="changelog-summary">
+          <text class="changelog-summary__copy">{{item.latest.summary}}</text>
+          <text wx:if="{{item.history.length}}" class="changelog-toggle {{expandedSeries === item.series ? 'changelog-toggle--expanded' : ''}}">⌄</text>
+        </view>
+      </view>
+      <view wx:if="{{expandedSeries === item.series && item.history.length}}" class="changelog-history">
+        <view wx:for="{{item.history}}" wx:for-item="record" wx:key="version" class="changelog-row changelog-row--history">
+          <text class="changelog-date">{{record.date}}</text>
+          <text class="changelog-version">{{record.version}}</text>
+          <view class="changelog-summary">
+            <text class="changelog-summary__copy">{{record.summary}}</text>
+          </view>
+        </view>
+      </view>
+    </block>
+    <view wx:if="{{hasMoreSeries}}" class="changelog-more" bindtap="onShowMore" aria-role="button" aria-label="查看更多功能版本更新记录">点击查看更多</view>
+  </view>
+
+  <view class="page-back-action" hover-class="page-back-action--pressed" bindtap="onBack" aria-role="button" aria-label="返回我的">返回我的</view>
+</view>

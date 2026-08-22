@@ -11,7 +11,9 @@ const {
   syncLines,
 } = require('../../utils/data-sync');
 const stationLocationData = require("../../data/station-locations");
+const { ENVIRONMENT_VERSIONS } = require('../../data/release-notes');
 const { normalizeFacilityTerms } = require('../../utils/display-copy');
+const { getCurrentVersion } = require('../../utils/version');
 
 const COLLAPSED_RECENT_COUNT = 5;
 const SYNC_CITY_ID = 'shanghai';
@@ -65,9 +67,11 @@ Page({
     recentExpanded: false,
     syncTone: 'blue',
     syncMessage: '本地数据 · 尚未同步',
+    versionTitle: '当前版本',
   },
   onShow() {
     const preferences = getPreferences();
+    const versionLabel = getCurrentVersion(ENVIRONMENT_VERSIONS);
     this._allRecentRecords = formatRecentRecords(dedupeRecentRecords(getRecentRecords()));
     this.setData({
       soundEnabled: preferences.soundEnabled !== false,
@@ -75,6 +79,7 @@ Page({
       recentTotal: this._allRecentRecords.length,
       recentExpanded: false,
       recentRecords: this._allRecentRecords.slice(0, COLLAPSED_RECENT_COUNT),
+      versionTitle: versionLabel ? `当前版本：${versionLabel}` : '当前版本',
     });
     if (!this._unsubscribeSync) {
       this._unsubscribeSync = subscribeSyncState((event) => {
@@ -169,5 +174,6 @@ Page({
     wx.navigateTo({ url: "/pages/correction/index" });
   },
   openAbout() { wx.navigateTo({ url: "/pages/profile/about/index" }); },
+  openChangelog() { wx.navigateTo({ url: '/pages/profile/changelog/index' }); },
   openDeveloperNote() { wx.navigateTo({ url: "/pages/profile/developer-note/index" }); }
 });

@@ -169,7 +169,8 @@ const wxml = fs.readFileSync(
 ].forEach((copy) => assert(wxml.includes(copy), `首页缺少分享入口文案：${copy}`));
 [
   'class="origin-smart-action"',
-  'catchtap="onRestoreSmartLocation">{{smartLocationActionLabel}}</view>',
+  'catchtap="onRestoreSmartLocation"',
+  '{{isManualAnchor ? manualSmartLocationActionLabel : smartLocationActionLabel}}',
 ].forEach((markup) => assert(wxml.includes(markup), '分享默认站页面必须直接显示智能定位入口'));
 [
   'showShareLocationInvite',
@@ -283,7 +284,7 @@ async function validateShareLifecycle() {
   assert.strictEqual(promptedLocationCalls, 1, '授权后应立即获取当前位置');
   assert.strictEqual(freshPage._state.originStationId, currentStation.lineStationIds[0]);
   assert.strictEqual(freshPage.data.locationStatus, 'success');
-  assert.strictEqual(freshPage.data.smartLocationActionLabel, '智能定位');
+  assert.strictEqual(freshPage.data.smartLocationActionLabel, '重新定位');
   assert.strictEqual(freshPage.data.showDefaultOriginLabel, false);
   freshPage.onUnload();
 

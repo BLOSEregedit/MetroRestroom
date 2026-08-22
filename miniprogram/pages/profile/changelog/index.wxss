@@ -1,0 +1,21 @@
+.changelog-page { display: flex; min-height: 100vh; flex-direction: column; padding: 24rpx 32rpx 40rpx; box-sizing: border-box; color: #1f2429; }
+.changelog-list { overflow: hidden; border: 1rpx solid #e7e9eb; border-radius: 18rpx; background: #fff; }
+.changelog-row { display: flex; min-height: 76rpx; align-items: center; padding: 0 20rpx; border-bottom: 1rpx solid #eee; box-sizing: border-box; }
+.changelog-row--header { min-height: 64rpx; background: #f7f8f9; color: #7f878e; font-weight: 500; }
+.changelog-row--record:active { background: #f7f9fb; }
+.changelog-date { width: 154rpx; flex: none; color: #8b939b; font-size: 22rpx; white-space: nowrap; }
+.changelog-version { width: 118rpx; flex: none; color: #59636c; font-size: 23rpx; white-space: nowrap; }
+.changelog-summary { display: flex; min-width: 0; align-items: center; flex: 1; }
+.changelog-summary__copy { min-width: 0; overflow: hidden; flex: 1; color: #343b41; font-size: 24rpx; text-overflow: ellipsis; white-space: nowrap; }
+.changelog-toggle { display: flex; width: 30rpx; height: 30rpx; flex: none; align-items: center; justify-content: flex-end; color: #8b939b; font-size: 0; line-height: 0; transform: rotate(0deg); transition: transform 160ms ease; }
+.changelog-toggle::after { width: 8rpx; height: 8rpx; border-right: 2rpx solid currentColor; border-bottom: 2rpx solid currentColor; content: ''; transform: rotate(45deg); }
+.changelog-toggle--expanded { transform: rotate(180deg); }
+.changelog-row--header .changelog-date,.changelog-row--header .changelog-version,.changelog-row--header .changelog-summary { color: inherit; font-size: 22rpx; }
+.changelog-history { background: #f8fafb; }
+.changelog-row--history { background: #f8fafb; }
+.changelog-row--history .changelog-date { color: #929aa2; }
+.changelog-row--history .changelog-version { color: #68727b; }
+.changelog-row--history .changelog-summary__copy { color: #59636c; }
+.changelog-more { min-height: 76rpx; color: #007aff; font-size: 24rpx; line-height: 76rpx; text-align: center; }
+.page-back-action { display: flex; min-height: 80rpx; align-items: center; justify-content: center; margin-top: auto; padding-top: 20rpx; color: #007aff; font-size: 28rpx; font-weight: 500; }
+.page-back-action--pressed { opacity: 0.55; }

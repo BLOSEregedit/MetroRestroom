@@ -13,6 +13,7 @@ let pageDefinition = null;
 const app = { globalData: { cloudReady: false, pendingCorrectionContext: null } };
 const navigationCalls = [];
 const toastCalls = [];
+const asyncChecks = [];
 
 global.getApp = () => app;
 global.wx = {
@@ -504,6 +505,7 @@ foregroundResumeCase.page._isPageVisible = true;
 foregroundResumeCase.page._isTimelineSinglePage = false;
 let foregroundStartCalls = 0;
 let foregroundFallbackCalls = 0;
+let foregroundPollingStarts = 0;
 foregroundResumeCase.page._ensureForegroundLocationUpdates = () => {
   foregroundStartCalls += 1;
   return Promise.resolve({ ok: false, status: 'unavailable' });
@@ -513,7 +515,11 @@ foregroundResumeCase.page._requestLocation = (positionRequest, options) => {
   foregroundResumeCase.page._fallbackLocationOptions = options;
   return Promise.resolve(null);
 };
-foregroundResumeCase.page._resumeForegroundSmartLocation();
+foregroundResumeCase.page._enableForegroundLocationFallbackPolling = () => {
+  foregroundPollingStarts += 1;
+  return Promise.resolve(null);
+};
+const foregroundResumePromise = foregroundResumeCase.page._resumeForegroundSmartLocation();
 assert.strictEqual(foregroundStartCalls, 1, '进入前台必须尝试启动持续定位');
 assert.strictEqual(foregroundFallbackCalls, 1, '持续定位不可用时仍必须执行已授权的单次定位');
 assert.deepStrictEqual(
@@ -521,6 +527,9 @@ assert.deepStrictEqual(
   { silent: true, fallbackToLast: true },
   '前台自动单次定位失败时必须保留上次位置且不打扰用户',
 );
+asyncChecks.push(foregroundResumePromise.then(() => {
+  assert.strictEqual(foregroundPollingStarts, 1, '持续定位不可用时必须启用前台定时降级');
+}));
 foregroundResumeCase.page.data.isManualAnchor = true;
 foregroundResumeCase.page._resumeForegroundSmartLocation();
 assert.strictEqual(foregroundStartCalls, 1, '自选起点期间不得重新启动持续定位');
@@ -575,18 +584,73 @@ let foregroundErrorFallbackCalls = 0;
 foregroundErrorCase.page._foregroundLocationController = {
   stop() { foregroundErrorStopCalls += 1; },
 };
-foregroundErrorCase.page._requestLocation = (positionRequest, options) => {
+foregroundErrorCase.page._enableForegroundLocationFallbackPolling = (options) => {
   foregroundErrorFallbackCalls += 1;
   foregroundErrorCase.page._foregroundErrorOptions = options;
+  return Promise.resolve(null);
 };
 foregroundErrorCase.page._onForegroundLocationError();
 assert.strictEqual(foregroundErrorStopCalls, 1, '持续定位运行中报错必须先停止并清理监听');
 assert.strictEqual(foregroundErrorFallbackCalls, 1, '持续定位运行中报错必须降级为单次定位');
 assert.deepStrictEqual(
   foregroundErrorCase.page._foregroundErrorOptions,
-  { silent: true, fallbackToLast: true, keepStatus: true },
-  '运行中降级不得覆盖上次有效定位状态',
+  { immediate: true },
+  '持续定位运行中报错必须立即启动单次定位并接续定时降级',
 );
+
+const foregroundPollingCase = createPage('2', 'forward', '人民广场', peopleSquare.id);
+foregroundPollingCase.page.data.isManualAnchor = false;
+foregroundPollingCase.page._isPageVisible = true;
+foregroundPollingCase.page._isTimelineSinglePage = false;
+foregroundPollingCase.page._foregroundLocationController = null;
+foregroundPollingCase.page._foregroundLocationFallbackEnabled = false;
+foregroundPollingCase.page._foregroundLocationFallbackTimer = null;
+foregroundPollingCase.page._foregroundLocationFallbackRequestPending = false;
+let foregroundPollingRequests = 0;
+let foregroundPollingOptions = null;
+foregroundPollingCase.page._requestLocation = (positionRequest, options) => {
+  foregroundPollingRequests += 1;
+  foregroundPollingOptions = options;
+  return {
+    then(onFulfilled) {
+      return Promise.resolve(onFulfilled(null));
+    },
+  };
+};
+const originalSetTimeout = global.setTimeout;
+const originalClearTimeout = global.clearTimeout;
+const pollingTimers = [];
+global.setTimeout = (callback, delay) => {
+  const timer = { callback, delay, cleared: false };
+  pollingTimers.push(timer);
+  return timer;
+};
+global.clearTimeout = (timer) => { timer.cleared = true; };
+try {
+  foregroundPollingCase.page._enableForegroundLocationFallbackPolling();
+  assert.strictEqual(pollingTimers.length, 1, '持续定位不可用时必须创建单次降级定时器');
+  assert.strictEqual(pollingTimers[0].delay, 5 * 60 * 1000, '单次定位降级间隔必须为 5 分钟');
+  pollingTimers[0].callback();
+  assert.strictEqual(foregroundPollingRequests, 1, '降级定时器到期后必须调用一次定位');
+  assert.deepStrictEqual(
+    foregroundPollingOptions,
+    { silent: true, fallbackToLast: true, keepStatus: true },
+    '定时降级必须静默执行，失败时保留上次有效定位',
+  );
+  assert.strictEqual(pollingTimers.length, 2, '单次定位完成后必须继续安排下一次 5 分钟轮询');
+  foregroundPollingCase.page._foregroundLocationFallbackRequestPending = true;
+  foregroundPollingCase.page._foregroundLocationFallbackTimer = null;
+  foregroundPollingCase.page._scheduleForegroundLocationFallback();
+  assert.strictEqual(pollingTimers.length, 2, '已有定位请求时不得重复创建降级定时器');
+  foregroundPollingCase.page._foregroundLocationFallbackRequestPending = false;
+  foregroundPollingCase.page._foregroundLocationFallbackTimer = pollingTimers[1];
+  foregroundPollingCase.page._disableForegroundLocationFallbackPolling();
+  assert.strictEqual(pollingTimers[1].cleared, true, '停止前台定位时必须清除降级定时器');
+  assert.strictEqual(foregroundPollingCase.page._foregroundLocationFallbackEnabled, false);
+} finally {
+  global.setTimeout = originalSetTimeout;
+  global.clearTimeout = originalClearTimeout;
+}
 
 const foregroundStopCase = createPage('2', 'forward', '人民广场', peopleSquare.id);
 let foregroundStopCalls = 0;
@@ -923,7 +987,7 @@ assert.strictEqual(applyLocationCase.page._directionMode, 'manual');
 assert.strictEqual(applyLocationCase.page._refreshedStationId, peopleSquare.id);
 assert.strictEqual(applyLocationCase.page.data.locationStatus, 'nearest');
 assert.strictEqual(applyLocationCase.page.data.locationLabel, '最近站 · 约 2.6 公里');
-assert.strictEqual(applyLocationCase.page.data.smartLocationActionLabel, '智能定位');
+assert.strictEqual(applyLocationCase.page.data.smartLocationActionLabel, '重新定位');
 const appliedLastLocation = storage.getLastLocationStation();
 assert.strictEqual(appliedLastLocation.cityId, 'shanghai');
 assert.strictEqual(appliedLastLocation.lineStationId, peopleSquare.id);
@@ -932,7 +996,11 @@ assert(appliedLastLocation.locatedAt > 0);
 
 const nearStationPresentationCase = createPage('2', 'forward', '人民广场', peopleSquare.id);
 nearStationPresentationCase.page._setLocationStatus('success');
-assert.strictEqual(nearStationPresentationCase.page.data.smartLocationActionLabel, '智能定位');
+assert.strictEqual(nearStationPresentationCase.page.data.smartLocationActionLabel, '重新定位');
+assert.strictEqual(
+  nearStationPresentationCase.page.data.smartLocationActionAriaLabel,
+  '当前为智能定位，点击重新定位',
+);
 assert.strictEqual(nearStationPresentationCase.page.data.locationLabel, '智能定位');
 
 const selectedNearbyCase = createPage('2', 'reverse', '人民广场', peopleSquare.id);
@@ -946,7 +1014,17 @@ const selectedNearbyCandidate = selectedNearbyCase.page._locationOptionsForMatch
 selectedNearbyCase.page._applyLocationCandidate(selectedNearbyCandidate);
 assert.strictEqual(selectedNearbyCase.page.data.locationStatus, 'selectedNearby');
 assert.strictEqual(selectedNearbyCase.page.data.locationLabel, '已选站 · 约 3.8 公里');
-assert.strictEqual(selectedNearbyCase.page.data.smartLocationActionLabel, '智能定位');
+assert.strictEqual(selectedNearbyCase.page.data.smartLocationActionLabel, '重新定位');
+
+const locationPresentationCase = createPage('2', 'forward', '人民广场', peopleSquare.id);
+locationPresentationCase.page._setLocationStatus('failed');
+assert.strictEqual(locationPresentationCase.page.data.smartLocationActionLabel, '重新定位');
+assert.strictEqual(locationPresentationCase.page.data.manualSmartLocationActionLabel, '重试智能定位');
+locationPresentationCase.page._setLocationStatus('denied');
+assert.strictEqual(locationPresentationCase.page.data.smartLocationActionLabel, '去开启定位');
+assert.strictEqual(locationPresentationCase.page.data.manualSmartLocationActionLabel, '去开启定位');
+locationPresentationCase.page._setLocationStatus('locating');
+assert.strictEqual(locationPresentationCase.page.data.smartLocationActionLabel, '定位中…');
 
 const invalidAnchorOrigin = manualAnchorCase.page._state.originStationId;
 manualAnchorCase.page.onSetManualAnchor({ currentTarget: { dataset: { stationId: 'missing' } } });
@@ -1308,15 +1386,25 @@ assert(homepageWxml.includes('class="city-control"'), '城市必须使用独立�
 assert(homepageWxml.includes('bindtap="onOpenCityPicker"'), '城市胶囊必须可打开城市面板');
 assert(homepageWxml.includes('更多城市陆续开放'), '第一版城市面板必须说明后续城市计划');
 assert(homepageWxml.includes('class="origin-name-control"'), '起点站名必须是独立点击区');
+assert.strictEqual((homepageWxml.match(/class="origin-action-row"/g) || []).length, 2, '普通定位与待确认状态都必须使用独立横向操作行');
+assert(/class="origin-action-row">\s*<view wx:if="\{\{isManualAnchor/.test(homepageWxml), '自选起点必须进入横向操作行');
 assert(/class="origin-mode origin-mode--\{\{locationStatus\}\}" role="button"[^>]*bindtap="onLocationAction"/.test(homepageWxml), '待确认站点必须保留独立确认入口，不得与智能定位入口混用');
 assert(homepageWxml.includes('bindtap="onOpenStationPicker"'), '普通起点站名必须可打开站点选择器');
 assert(homepageWxml.includes('class="origin-smart-action"'), '顶部必须常驻独立的智能定位入口');
-assert(homepageWxml.includes('catchtap="onRestoreSmartLocation">{{smartLocationActionLabel}}</view>'), '智能定位入口必须可重复点击且不触发站点选择');
-assert(homepageWxml.includes("当前为智能定位，点击重新定位"), '已定位状态必须说明可重新定位');
-assert(homepageWxml.includes("!showDefaultOriginLabel && locationStatus !== 'success'"), '用户在地铁站或附近时不得额外显示最近站距离');
+assert(homepageWxml.includes('{{isManualAnchor ? manualSmartLocationActionLabel : smartLocationActionLabel}}'), '顶部定位动作必须按自选或智能模式显示不同动词');
+assert(homepageWxml.includes('catchtap="onRestoreSmartLocation"'), '顶部定位动作必须可切换或重新定位且不触发站点选择');
+assert(homepageWxml.includes('aria-label="{{isManualAnchor ? manualSmartLocationActionAriaLabel : smartLocationActionAriaLabel}}"'), '定位动作的无障碍说明必须依据真实模式生成');
+assert(homepageWxml.includes('locationStatus === \'locating\''), '定位中必须显示不可重复点击的等待状态');
+assert(homepageWxml.includes('wx:elif="{{!showDefaultOriginLabel}}"'), '智能定位成功时必须继续显示独立状态标签');
 assert(homepageWxml.includes("locationStatus === 'nearest' ? '直线距离，到站路程未计入预计时间，' : ''"), '最近站的可访问名称必须说明直线距离不计入到站路程');
 assert(homepageWxml.includes('自选起点'), '手动起点必须使用已确认的用户文案');
 assert(homepageWxml.includes('onRestoreSmartLocation'), '自选起点必须能通过常驻入口恢复定位');
+assert(/\.origin-smart-action\s*\{[^}]*color:\s*#0068d9;/.test(homepageWxss), '顶部定位动作必须使用与状态标签不同的操作色');
+assert(homepageWxss.includes('.origin-smart-action--disabled'), '定位中动作必须提供不可点击样式');
+assert(!/\.origin-smart-action\s*\{[^}]*margin-left:/.test(homepageWxss), '智能定位不得再依靠站名后的左外边距定位');
+assert(homepageJs.includes("smartLocationActionLabel = '重新定位'"), '智能定位模式必须显示明确的重新定位动作');
+assert(homepageJs.includes("manualSmartLocationActionLabel: '切换智能定位'"), '自选模式必须显示明确的切换智能定位动作');
+assert(homepageJs.includes("syncActionLabel: '更新'"), '右下角数据同步更新文案必须保持不变');
 assert(!homepageWxml.includes('当前计算起点</text>'), '顶部不得继续常驻旧计算起点标签');
 assert(!homepageWxml.includes('>更换</text>'), '顶部不得继续常驻旧更换按钮');
 assert(!homepageJs.includes("locationLabel: '尚未开启定位'"), '首次进入不得继续使用旧定位状态文案');
@@ -1538,4 +1626,9 @@ assert.strictEqual(hapticCount, 1, '首个站点 detent 必须触发一次轻触
 feedback.destroy();
 assert.strictEqual(audioDestroyCount, 2, '页面卸载必须释放完整音频池');
 
-console.log('首页交互验收通过：顶部两行控制、城市面板、自选起点、同步状态、Skyline 连续轮盘、逐站反馈、速度惯性、横滑换乘和抽屉分组。');
+Promise.all(asyncChecks).then(() => {
+  console.log('首页交互验收通过：顶部两行控制、城市面板、自选起点、前台定位降级、同步状态、Skyline 连续轮盘、逐站反馈、速度惯性、横滑换乘和抽屉分组。');
+}).catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

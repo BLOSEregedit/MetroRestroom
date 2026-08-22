@@ -51,6 +51,7 @@ const SYNC_BUNDLE_SCHEMA = 1;
 const OPERATIONAL_STATUS_REFRESH_MS = 60 * 1000;
 const FOREGROUND_LOCATION_MIN_INTERVAL_MS = 3000;
 const FOREGROUND_LOCATION_CONFIRMATION_SAMPLES = 2;
+const FOREGROUND_LOCATION_FALLBACK_INTERVAL_MS = 5 * 60 * 1000;
 const TRANSFER_SWIPE_PX = 48;
 const HORIZONTAL_GESTURE_RATIO = 1.2;
 const WHEEL_VISIBLE_SLOTS = 5;
@@ -255,6 +256,9 @@ Page({
     locationActionLabel: '开启定位',
     showLocationAction: true,
     smartLocationActionLabel: '开启智能定位',
+    smartLocationActionAriaLabel: '当前未开启智能定位，点击开启智能定位',
+    manualSmartLocationActionLabel: '切换智能定位',
+    manualSmartLocationActionAriaLabel: '当前为自选起点，点击切换为智能定位',
     showLocationCandidates: false,
     locationCandidates: [],
     showNearbyStationPicker: false,
@@ -297,6 +301,9 @@ Page({
     this._foregroundLocationLastHandledAt = 0;
     this._foregroundLocationPendingStationId = '';
     this._foregroundLocationPendingCount = 0;
+    this._foregroundLocationFallbackEnabled = false;
+    this._foregroundLocationFallbackTimer = null;
+    this._foregroundLocationFallbackRequestPending = false;
     this._isPageVisible = false;
     this._hasConfirmedLocation = Boolean(initialState.lastLocationStation);
     this._lastLocationStation = initialState.lastLocationStation || null;
@@ -478,7 +485,16 @@ Page({
         silent: true,
         fallbackToLast: true,
       }),
-    ]);
+    ]).then((results) => {
+      const foregroundResult = results[0] || {};
+      if (foregroundResult.ok) {
+        this._disableForegroundLocationFallbackPolling();
+      } else if (foregroundResult.status !== 'notAuthorized'
+        && foregroundResult.status !== 'inactive') {
+        this._enableForegroundLocationFallbackPolling();
+      }
+      return results;
+    });
   },
 
   _ensureForegroundLocationUpdates() {
@@ -486,6 +502,7 @@ Page({
       return Promise.resolve({ ok: false, status: 'inactive' });
     }
     if (this._foregroundLocationController) {
+      this._disableForegroundLocationFallbackPolling();
       return Promise.resolve({ ok: true, reused: true });
     }
     if (this._foregroundLocationStartPromise) return this._foregroundLocationStartPromise;
@@ -516,6 +533,7 @@ Page({
         return { ok: false, status: 'inactive' };
       }
       this._foregroundLocationController = result;
+      this._disableForegroundLocationFallbackPolling();
       return result;
     });
     this._foregroundLocationStartPromise = startPromise;
@@ -531,16 +549,83 @@ Page({
     const controller = this._foregroundLocationController;
     this._foregroundLocationController = null;
     if (controller && typeof controller.stop === 'function') controller.stop();
+    this._disableForegroundLocationFallbackPolling();
+  },
+
+  _canPollForegroundLocation() {
+    return Boolean(
+      this._isPageVisible
+      && !this._isTimelineSinglePage
+      && !this.data.isManualAnchor
+      && !this._foregroundLocationController,
+    );
+  },
+
+  _enableForegroundLocationFallbackPolling(options) {
+    if (!this._canPollForegroundLocation()) return Promise.resolve(null);
+    this._foregroundLocationFallbackEnabled = true;
+    if (options && options.immediate) return this._requestForegroundFallbackLocation();
+    this._scheduleForegroundLocationFallback();
+    return Promise.resolve(null);
+  },
+
+  _disableForegroundLocationFallbackPolling() {
+    this._foregroundLocationFallbackEnabled = false;
+    if (this._foregroundLocationFallbackTimer) {
+      clearTimeout(this._foregroundLocationFallbackTimer);
+      this._foregroundLocationFallbackTimer = null;
+    }
+  },
+
+  _scheduleForegroundLocationFallback() {
+    if (!this._foregroundLocationFallbackEnabled
+      || !this._canPollForegroundLocation()
+      || this._foregroundLocationFallbackTimer
+      || this._foregroundLocationFallbackRequestPending) return;
+    this._foregroundLocationFallbackTimer = setTimeout(() => {
+      this._foregroundLocationFallbackTimer = null;
+      this._requestForegroundFallbackLocation();
+    }, FOREGROUND_LOCATION_FALLBACK_INTERVAL_MS);
+  },
+
+  _requestForegroundFallbackLocation() {
+    if (!this._foregroundLocationFallbackEnabled || !this._canPollForegroundLocation()) {
+      return Promise.resolve(null);
+    }
+    if (this._foregroundLocationFallbackRequestPending) return Promise.resolve(null);
+    if (this._foregroundLocationFallbackTimer) {
+      clearTimeout(this._foregroundLocationFallbackTimer);
+      this._foregroundLocationFallbackTimer = null;
+    }
+
+    this._foregroundLocationFallbackRequestPending = true;
+    let positionResult = null;
+    const finish = () => {
+      this._foregroundLocationFallbackRequestPending = false;
+      if (positionResult && positionResult.status === 'notAuthorized') {
+        this._disableForegroundLocationFallbackPolling();
+      } else {
+        this._scheduleForegroundLocationFallback();
+      }
+      return positionResult;
+    };
+    return this._requestLocation(
+      (api) => requestAuthorizedCurrentPosition(api).then((result) => {
+        positionResult = result;
+        return result;
+      }),
+      {
+        silent: true,
+        fallbackToLast: true,
+        keepStatus: true,
+      },
+    ).then(finish, finish);
   },
 
   _onForegroundLocationError() {
     if (!this._isPageVisible || this._isTimelineSinglePage || this.data.isManualAnchor) return;
     this._stopForegroundLocationUpdates();
-    this._requestLocation(requestAuthorizedCurrentPosition, {
-      silent: true,
-      fallbackToLast: true,
-      keepStatus: true,
-    });
+    this._enableForegroundLocationFallbackPolling({ immediate: true });
   },
 
   _onForegroundLocationChange(position) {
@@ -917,22 +1002,35 @@ Page({
       },
     };
     const state = states[status] || states.failed;
-    const smartLocationActive = [
-      'cached',
-      'locating',
-      'success',
-      'nearest',
-      'stationRequired',
-      'selectedNearby',
-      'lineRequired',
-      'unmatched',
-    ].includes(status);
+    let smartLocationActionLabel = '重新定位';
+    let smartLocationActionAriaLabel = '当前为智能定位，点击重新定位';
+    if (status === 'notRequested' || status === 'unavailable') {
+      smartLocationActionLabel = '开启智能定位';
+      smartLocationActionAriaLabel = '当前未开启智能定位，点击开启智能定位';
+    } else if (status === 'denied') {
+      smartLocationActionLabel = '去开启定位';
+      smartLocationActionAriaLabel = '定位权限未开启，点击前往开启定位';
+    } else if (status === 'locating') {
+      smartLocationActionLabel = '定位中…';
+      smartLocationActionAriaLabel = '正在定位，请稍候';
+    }
+    const manualLocationDenied = status === 'denied';
+    const manualLocationFailed = status === 'failed';
     const patch = {
       locationStatus: status,
       locationLabel: state.label,
       locationActionLabel: state.action,
       showLocationAction: state.showAction,
-      smartLocationActionLabel: smartLocationActive ? '智能定位' : '开启智能定位',
+      smartLocationActionLabel,
+      smartLocationActionAriaLabel,
+      manualSmartLocationActionLabel: manualLocationDenied
+        ? '去开启定位'
+        : (manualLocationFailed ? '重试智能定位' : '切换智能定位'),
+      manualSmartLocationActionAriaLabel: manualLocationDenied
+        ? '当前为自选起点，点击前往开启定位'
+        : (manualLocationFailed
+          ? '当前为自选起点，点击重试智能定位'
+          : '当前为自选起点，点击切换为智能定位'),
       locationIssue: issue || '',
     };
     if (['success', 'nearest', 'selectedNearby'].includes(status)) {
@@ -2080,6 +2178,7 @@ Page({
       wx.showToast({ title: '进入小程序后可定位附近站点', icon: 'none' });
       return;
     }
+    if (this.data.locationStatus === 'locating') return;
     if ((this.data.locationStatus === 'lineRequired' && this.data.locationCandidates.length)
       || (this.data.locationStatus === 'stationRequired'
         && this.data.nearbyStationCandidates.length)
@@ -2286,7 +2385,13 @@ Page({
         return;
       }
 
-      if (requestOptions.startForeground) this._ensureForegroundLocationUpdates();
+      if (requestOptions.startForeground) {
+        this._ensureForegroundLocationUpdates().then((foregroundResult) => {
+          if (!foregroundResult.ok && foregroundResult.status !== 'inactive') {
+            this._enableForegroundLocationFallbackPolling();
+          }
+        });
+      }
 
       const match = rankNearbyStations(result.position, stationLocationData.stations);
       if (match.status === 'unmatched') {
